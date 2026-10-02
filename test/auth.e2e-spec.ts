@@ -1,6 +1,6 @@
-import { Controller, Get, INestApplication } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
-import { App } from 'supertest/types.js';
 import { Roles } from '../src/common/decorators/roles.decorator.js';
 import { hashToken } from '../src/modules/auth/refresh-token.js';
 import { hashPassword } from '../src/modules/auth/scrypt.js';
@@ -51,7 +51,7 @@ const AUTH_RESPONSE_KEYS = [
 ].sort();
 
 describe('Auth (e2e, real database)', () => {
-  let app: INestApplication<App>;
+  let app: NestExpressApplication;
   let prisma: PrismaService;
   let hashes: Record<string, string>;
   const http = () => request(app.getHttpServer());

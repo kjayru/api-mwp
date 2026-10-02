@@ -2,8 +2,9 @@
 // - Admin user: created from SEED_ADMIN_*; on later runs only its role (ADMIN) and
 //   isActive are enforced. The password is never overwritten.
 // - SiteSettings: created once; later runs keep the values edited in the admin.
-// - Technologies, services and cases: upserted to the seed content (natural keys:
-//   technology slug, ES translation slug).
+// - Technologies, services and cases: create-only (natural keys: technology slug,
+//   ES translation slug). Existing rows, edited or soft-deleted from the admin, are
+//   never touched, so the seed is safe to re-run on QA.
 //
 // Runs with Node's native type stripping (no tsx): see prisma/ts-resolve-hook.mjs.
 import '../src/config/load-env.js';
@@ -82,17 +83,25 @@ async function seedTechnologies(
   prisma: PrismaClient,
 ): Promise<Map<string, string>> {
   const ids = new Map<string, string>();
+  let created = 0;
   for (const [index, tech] of technologies.entries()) {
-    const data = { ...tech, sortOrder: index + 1, deletedAt: null };
-    const row = await prisma.technology.upsert({
+    // Create-only: an existing row (even soft-deleted) is managed from the admin.
+    const existing = await prisma.technology.findUnique({
       where: { slug: tech.slug },
-      create: data,
-      update: data,
       select: { id: true },
     });
+    const row =
+      existing ??
+      (await prisma.technology.create({
+        data: { ...tech, sortOrder: index + 1 },
+        select: { id: true },
+      }));
+    if (!existing) created++;
     ids.set(tech.slug, row.id);
   }
-  console.log(`  technologies: ${technologies.length}`);
+  console.log(
+    `  technologies: ${created} created, ${technologies.length - created} kept`,
+  );
   return ids;
 }
 
@@ -104,44 +113,37 @@ function technologyIds(slugs: string[], ids: Map<string, string>): string[] {
   });
 }
 
+/** Create-only: returns false when the service already exists (even soft-deleted). */
 async function seedService(
   prisma: PrismaClient,
   service: ServiceSeed,
   sortOrder: number,
   techIds: Map<string, string>,
-) {
+): Promise<boolean> {
   const existing = await prisma.serviceTranslation.findUnique({
     where: {
       locale_slug: { locale: 'ES', slug: service.translations.ES.slug },
     },
     select: { serviceId: true },
   });
+  if (existing) return false;
   const linked = technologyIds(service.technologies, techIds);
 
   await prisma.$transaction(async (tx) => {
-    const { id } = existing
-      ? await tx.service.update({
-          where: { id: existing.serviceId },
-          data: { sortOrder, deletedAt: null },
-        })
-      : await tx.service.create({ data: { sortOrder } });
+    const { id } = await tx.service.create({ data: { sortOrder } });
 
     for (const locale of LOCALES) {
-      const t = service.translations[locale];
-      await tx.serviceTranslation.upsert({
-        where: { serviceId_locale: { serviceId: id, locale } },
-        create: {
-          ...t,
+      await tx.serviceTranslation.create({
+        data: {
+          ...service.translations[locale],
           serviceId: id,
           locale,
           status: 'PUBLISHED',
           publishedAt: new Date(),
         },
-        update: { ...t, status: 'PUBLISHED' },
       });
     }
 
-    await tx.serviceTechnology.deleteMany({ where: { serviceId: id } });
     await tx.serviceTechnology.createMany({
       data: linked.map((technologyId, i) => ({
         serviceId: id,
@@ -150,18 +152,21 @@ async function seedService(
       })),
     });
   });
+  return true;
 }
 
+/** Create-only: returns false when the case already exists (even soft-deleted). */
 async function seedCase(
   prisma: PrismaClient,
   item: CaseSeed,
   sortOrder: number,
   techIds: Map<string, string>,
-) {
+): Promise<boolean> {
   const existing = await prisma.caseTranslation.findUnique({
     where: { locale_slug: { locale: 'ES', slug: item.translations.ES.slug } },
     select: { caseId: true },
   });
+  if (existing) return false;
   const linked = technologyIds(item.technologies, techIds);
   const caseData = {
     type: item.type,
@@ -173,24 +178,22 @@ async function seedCase(
   };
 
   await prisma.$transaction(async (tx) => {
-    const { id } = existing
-      ? await tx.case.update({
-          where: { id: existing.caseId },
-          data: { ...caseData, deletedAt: null },
-        })
-      : await tx.case.create({ data: caseData });
+    const { id } = await tx.case.create({ data: caseData });
 
     for (const locale of LOCALES) {
       const { blocks, ...t } = item.translations[locale];
-      const data = { ...t, blocks: json(blocks), status: 'PUBLISHED' as const };
-      await tx.caseTranslation.upsert({
-        where: { caseId_locale: { caseId: id, locale } },
-        create: { ...data, caseId: id, locale, publishedAt: new Date() },
-        update: data,
+      await tx.caseTranslation.create({
+        data: {
+          ...t,
+          blocks: json(blocks),
+          status: 'PUBLISHED',
+          publishedAt: new Date(),
+          caseId: id,
+          locale,
+        },
       });
     }
 
-    await tx.caseTechnology.deleteMany({ where: { caseId: id } });
     await tx.caseTechnology.createMany({
       data: linked.map((technologyId, i) => ({
         caseId: id,
@@ -199,6 +202,7 @@ async function seedCase(
       })),
     });
   });
+  return true;
 }
 
 async function main() {
@@ -215,14 +219,18 @@ async function main() {
     await seedAdmin(prisma);
     await seedSiteSettings(prisma);
     const techIds = await seedTechnologies(prisma);
+    let created = 0;
     for (const [index, service] of services.entries()) {
-      await seedService(prisma, service, index + 1, techIds);
+      if (await seedService(prisma, service, index + 1, techIds)) created++;
     }
-    console.log(`  services: ${services.length}`);
+    console.log(
+      `  services: ${created} created, ${services.length - created} kept`,
+    );
+    created = 0;
     for (const [index, item] of cases.entries()) {
-      await seedCase(prisma, item, index + 1, techIds);
+      if (await seedCase(prisma, item, index + 1, techIds)) created++;
     }
-    console.log(`  cases: ${cases.length}`);
+    console.log(`  cases: ${created} created, ${cases.length - created} kept`);
     console.log('Seed finished.');
   } finally {
     await prisma.$disconnect();

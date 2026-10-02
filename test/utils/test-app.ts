@@ -1,7 +1,7 @@
 import { INestApplication, Type } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
-import { Test } from '@nestjs/testing';
-import { App } from 'supertest/types.js';
+import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module.js';
 import { PrismaService } from '../../src/prisma/prisma.service.js';
 import { setupApp } from '../../src/setup-app.js';
@@ -9,12 +9,15 @@ import { setupApp } from '../../src/setup-app.js';
 /** Boots the real AppModule with the same global setup as main.ts. */
 export async function createTestApp(
   controllers: Type[] = [],
-): Promise<INestApplication<App>> {
-  const moduleFixture = await Test.createTestingModule({
-    imports: [AppModule],
-    controllers,
-  }).compile();
-  const app = moduleFixture.createNestApplication<INestApplication<App>>();
+  configure: (builder: TestingModuleBuilder) => TestingModuleBuilder = (b) => b,
+): Promise<NestExpressApplication> {
+  const moduleFixture = await configure(
+    Test.createTestingModule({
+      imports: [AppModule],
+      controllers,
+    }),
+  ).compile();
+  const app = moduleFixture.createNestApplication<NestExpressApplication>();
   setupApp(app);
   await app.init();
   return app;

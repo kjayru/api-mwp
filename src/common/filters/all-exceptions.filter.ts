@@ -15,6 +15,8 @@ export interface ErrorResponse {
   message: string | string[];
   path: string;
   timestamp: string;
+  /** Machine-readable extra data, only on some errors (e.g. 422 on publish). */
+  details?: unknown;
 }
 
 /** Gives every error the same response shape and hides internals of unexpected ones. */
@@ -31,6 +33,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let statusCode: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let error = 'Internal Server Error';
     let message: string | string[] = 'Internal server error';
+    let details: unknown;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -43,9 +46,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const body = response as {
           message?: string | string[];
           error?: string;
+          details?: unknown;
         };
         message = body.message ?? exception.message;
         error = body.error ?? exception.name;
+        details = body.details;
       }
     } else {
       this.logger.error(
@@ -59,6 +64,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message,
       path: httpAdapter.getRequestUrl(ctx.getRequest()) as string,
       timestamp: new Date().toISOString(),
+      ...(details === undefined ? {} : { details }),
     };
     httpAdapter.reply(ctx.getResponse(), body, statusCode);
   }

@@ -47,6 +47,61 @@ describe('validateEnv', () => {
     ).toThrow(/DATABASE_URL/);
   });
 
+  it('defaults the uploads settings and leaves the revalidation webhook off', () => {
+    const env = validateEnv(required);
+
+    expect(env.UPLOADS_DIR).toBe('./uploads');
+    expect(env.PUBLIC_UPLOADS_URL).toBe('http://localhost:3001/uploads');
+    expect(env.FRONT_REVALIDATE_URL).toBeUndefined();
+    expect(env.REVALIDATE_SECRET).toBeUndefined();
+  });
+
+  it('strips the trailing slash of PUBLIC_UPLOADS_URL and treats empty values as unset', () => {
+    const env = validateEnv({
+      ...required,
+      PUBLIC_UPLOADS_URL: 'https://api.miwebprofesional.com/uploads/',
+      FRONT_REVALIDATE_URL: '',
+      REVALIDATE_SECRET: '',
+    });
+
+    expect(env.PUBLIC_UPLOADS_URL).toBe(
+      'https://api.miwebprofesional.com/uploads',
+    );
+    expect(env.FRONT_REVALIDATE_URL).toBeUndefined();
+  });
+
+  it('requires a REVALIDATE_SECRET of at least 32 characters when FRONT_REVALIDATE_URL is set', () => {
+    const FRONT_REVALIDATE_URL = 'http://localhost:3000/api/revalidate';
+
+    expect(() => validateEnv({ ...required, FRONT_REVALIDATE_URL })).toThrow(
+      /REVALIDATE_SECRET/,
+    );
+    expect(() =>
+      validateEnv({
+        ...required,
+        FRONT_REVALIDATE_URL,
+        REVALIDATE_SECRET: 'short',
+      }),
+    ).toThrow(/REVALIDATE_SECRET/);
+    expect(
+      validateEnv({
+        ...required,
+        FRONT_REVALIDATE_URL,
+        REVALIDATE_SECRET: 's'.repeat(32),
+      }).FRONT_REVALIDATE_URL,
+    ).toBe(FRONT_REVALIDATE_URL);
+  });
+
+  it('rejects a non-http FRONT_REVALIDATE_URL', () => {
+    expect(() =>
+      validateEnv({
+        ...required,
+        FRONT_REVALIDATE_URL: 'ftp://localhost/revalidate',
+        REVALIDATE_SECRET: 's'.repeat(32),
+      }),
+    ).toThrow(/FRONT_REVALIDATE_URL/);
+  });
+
   it('requires a JWT_SECRET of at least 32 characters', () => {
     expect(() => validateEnv({ DATABASE_URL })).toThrow(/JWT_SECRET/);
     expect(() =>

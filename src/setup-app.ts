@@ -1,15 +1,16 @@
-import {
-  INestApplication,
-  ValidationPipe,
-  VersioningType,
-} from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import type { Env } from './config/env.js';
+import { uploadsRoot } from './modules/uploads/storage/local-file-storage.js';
+
+export const UPLOADS_ROUTE = '/uploads';
 
 /** Global HTTP setup shared by main.ts and the e2e tests. Routes end up as /api/v1/... */
-export function setupApp(app: INestApplication): void {
+export function setupApp(app: NestExpressApplication): void {
   const config = app.get<ConfigService<Env, true>>(ConfigService);
 
   app.setGlobalPrefix('api');
@@ -26,5 +27,29 @@ export function setupApp(app: INestApplication): void {
     }),
   );
   app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost)));
+  serveUploads(app, uploadsRoot(config));
   app.enableShutdownHooks();
+}
+
+/**
+ * Serves UPLOADS_DIR at /uploads (outside the /api prefix). File names are
+ * random and never reused, so they are cached for a year as immutable. No
+ * directory listing, no index files, no dotfiles, nothing outside the root
+ * (`send` rejects ".." traversal); misses fall through to the JSON 404.
+ */
+function serveUploads(app: NestExpressApplication, root: string): void {
+  app.useStaticAssets(root, {
+    prefix: UPLOADS_ROUTE,
+    index: false,
+    redirect: false,
+    dotfiles: 'ignore',
+    fallthrough: true,
+    maxAge: '365d',
+    immutable: true,
+    setHeaders: (res: Response) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'");
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
+  });
 }

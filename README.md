@@ -38,6 +38,10 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 | `SEED_ADMIN_NAME` | no (solo seed) | `Wile` | Nombre del admin |
 | `SEED_ADMIN_PASSWORD` | **sí para el seed** | — | Contraseña inicial del admin (mínimo 8 caracteres). Sin ella el seed falla |
 | `OBSERVE_APP_KEY` / `OBSERVE_APP_SECRET` | no | — | Telemetría de NestJS Observe (solo si están ambas) |
+| `UPLOADS_DIR` | no | `./uploads` | Carpeta donde se guardan las imágenes subidas (relativa al directorio de trabajo). Se sirve en `/uploads` |
+| `PUBLIC_UPLOADS_URL` | no | `http://localhost:3001/uploads` | URL pública de `UPLOADS_DIR`; las subidas devuelven `<PUBLIC_UPLOADS_URL>/<aaaa>/<mm>/<archivo>` |
+| `FRONT_REVALIDATE_URL` | no | — | Webhook de revalidación de front-mwp (dev: `http://localhost:3000/api/revalidate`). Vacía = desactivado |
+| `REVALIDATE_SECRET` | sí, si hay `FRONT_REVALIDATE_URL` | — | Secreto compartido con front-mwp (cabecera `x-revalidate-secret`), mínimo 32 caracteres. **El mismo valor** en el `.env.local` de front-mwp |
 
 ## Puertos del workspace
 
@@ -90,8 +94,24 @@ Esquema en `prisma/schema.prisma`; migración `20261002202732_phase2_domain_mode
 
 - **Admin:** se crea con `SEED_ADMIN_*`. En ejecuciones posteriores solo se fuerzan `role = ADMIN` e `isActive = true`; la contraseña nunca se sobrescribe.
 - **SiteSettings:** se crea una vez; después se respetan los cambios hechos desde el admin.
-- **Tecnologías, servicios y casos:** se actualizan al contenido del seed (claves naturales: slug de la tecnología y slug ES de la traducción).
+- **Tecnologías, servicios y casos:** solo se crean si no existen (claves naturales: slug de la tecnología y slug ES de la traducción). Lo que ya existe —editado o borrado desde el admin— no se toca, así que el seed se puede repetir en QA sin perder contenido.
 - Marcadores pendientes: `[completar]` (datos que aún no tenemos; nunca inventar resultados de clientes), `[N]` (métricas) y `[revisar]` (textos escritos para el seed, no del mockup).
+
+## API de contenido (Fase 3)
+
+Contrato completo para front-mwp y admin-mwp en **[docs/API.md](docs/API.md)**: endpoints públicos (`/cases`, `/cases/:slug`, `/technologies`, `/services`, `/stats`), administración de casos, tecnologías y servicios, subida de imágenes y el webhook de revalidación del front.
+
+- **Públicos:** solo contenido publicado en el idioma pedido (`?locale=es|en`, obligatorio), con `Cache-Control: public, max-age=60`.
+- **Admin** (`/admin/...`): roles `ADMIN` y `EDITOR`. Publicación por idioma con validación (422 con los campos que faltan). Borrado lógico y orden con `PUT /admin/<recurso>/order`.
+- **Revalidación:** tras cada cambio de contenido público la API envía `POST FRONT_REVALIDATE_URL` con `{ tags }`. Es *fire-and-forget*: tiempo máximo de 3 s, sin reintentos y nunca hace fallar la petición del admin.
+
+### Imágenes subidas
+
+- `POST /api/v1/admin/uploads` (multipart, campo `file`) acepta JPEG, PNG, WebP y AVIF de hasta 5 MB. El tipo se comprueba por los *magic bytes* del archivo, no por el nombre ni por el mimetype. Usa el multer que trae `@nestjs/platform-express`; no añade dependencias.
+- Los archivos se guardan en `UPLOADS_DIR` (por defecto `./uploads`, ignorado por git) como `<aaaa>/<mm>/<nombre aleatorio>.<ext>`.
+- Se sirven en `/uploads/...`, fuera del prefijo `/api`, con caché de un año (`immutable`) y `X-Content-Type-Options: nosniff`. No se listan directorios ni se sirve nada fuera de `UPLOADS_DIR`.
+- El almacenamiento está detrás de `FileStorage` (`src/modules/uploads/storage/`). Hoy solo existe `LocalFileStorage`; para S3 se añade otra implementación.
+- **Despliegue (QA):** el redespliegue de `docs/DEPLOY-QA.md` borra todo `/srv/mwp/api` salvo `node_modules`, así que `UPLOADS_DIR` debe apuntar **fuera** del código (p. ej. `/srv/mwp/uploads`, propiedad de `mwp`, y permitido en `ReadWritePaths` si el servicio usa `ProtectSystem`). Hay que fijar también `PUBLIC_UPLOADS_URL=https://api.miwebprofesional.com/uploads` y comprobar que el vhost reenvía `/uploads` a la API.
 
 ## Auth API
 
@@ -125,11 +145,11 @@ Comportamiento a tener en cuenta en los clientes:
 ## Tests
 
 - **Unitarios** (`npm test`): `*.spec.ts` junto al código, con dependencias simuladas.
-- **E2E** (`npm run test:e2e`): `test/*.e2e-spec.ts` con la configuración global de `main.ts`. El `globalSetup` (`test/global-setup.ts`) crea la base `mwp_test` en el mismo contenedor (si no existe) y aplica las migraciones con `prisma migrate deploy`; cada test vacía las tablas (`TRUNCATE`). Los archivos se ejecutan en serie. Necesita la base de datos levantada (`npm run db:up`).
+- **E2E** (`npm run test:e2e`): `test/*.e2e-spec.ts` con la configuración global de `main.ts`. El `globalSetup` (`test/global-setup.ts`) crea la base `mwp_test` en el mismo contenedor (si no existe) y aplica las migraciones con `prisma migrate deploy`; cada test vacía las tablas (`TRUNCATE`). Los archivos se ejecutan en serie. Necesita la base de datos levantada (`npm run db:up`). Las subidas de los e2e van a una carpeta temporal del sistema (`<tmp>/mwp-e2e-uploads`), nunca a `./uploads`. El webhook de revalidación está desactivado salvo en `test/revalidation.e2e-spec.ts`, que lo dirige a un servidor HTTP local.
 
 ## Convenciones
 
-- Rutas bajo `/api/v1/...`; los errores siguen el formato `{ statusCode, error, message, path, timestamp }`.
+- Rutas bajo `/api/v1/...`; los errores siguen el formato `{ statusCode, error, message, path, timestamp }`, más un campo `details` opcional y legible por máquina (p. ej. en los 422 de publicación).
 - Las rutas nuevas están protegidas por defecto; usa `@Public()` solo cuando deban ser abiertas y `@Roles(...)` para restringir por rol.
 - Nunca se registran en logs contraseñas ni tokens.
 - La telemetría de NestJS Observe solo se activa si se definen `OBSERVE_APP_KEY` y `OBSERVE_APP_SECRET`.

@@ -1,13 +1,12 @@
-import { INestApplication } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
-import { App } from 'supertest/types.js';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
 import { setupApp } from './../src/setup-app.js';
 
 describe('API (e2e)', () => {
-  let app: INestApplication<App>;
+  let app: NestExpressApplication;
   const queryRaw = vi.fn();
 
   beforeAll(async () => {
@@ -18,7 +17,7 @@ describe('API (e2e)', () => {
       .useValue({ $queryRaw: queryRaw, $disconnect: vi.fn() })
       .compile();
 
-    app = moduleFixture.createNestApplication();
+    app = moduleFixture.createNestApplication<NestExpressApplication>();
     setupApp(app);
     await app.init();
   });
