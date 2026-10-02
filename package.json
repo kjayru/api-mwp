@@ -29,7 +29,7 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "prisma:generate": "prisma generate",
-    "user:set-password": "node --import ./prisma/ts-resolve-hook.mjs prisma/set-password.ts"
+    "user:set-password": "node --experimental-strip-types --import ./prisma/ts-resolve-hook.mjs prisma/set-password.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

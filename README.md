@@ -4,7 +4,7 @@ API de **miwebprofesional** (NestJS 12, ESM, Prisma 7, PostgreSQL + pgvector). L
 
 ## Requisitos
 
-- Node.js 24 (≥ 22.18: el seed usa el *type stripping* nativo de Node)
+- Node.js 24 (o 22.18+; el seed usa el *type stripping* nativo de Node con `--experimental-strip-types`)
 - Docker Desktop (base de datos local)
 
 ## Puesta en marcha
