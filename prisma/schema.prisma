@@ -1,0 +1,11 @@
+// Prisma ORM 7 schema for api-mwp. The connection URL lives in prisma.config.ts.
+// Models are added from Phase 2 onwards (see docs/PLAN.md in front-mwp).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
