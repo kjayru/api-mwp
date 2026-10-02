@@ -1,5 +1,16 @@
 // Prisma ORM 7 schema for api-mwp. The connection URL lives in prisma.config.ts.
-// Models are added from Phase 2 onwards (see docs/PLAN.md in front-mwp).
+//
+// Conventions (see README "Modelo de datos"):
+// - Tables and columns are snake_case in PostgreSQL (@@map / @map) so raw SQL
+//   (pgvector queries from Phase 4) reads naturally; Prisma models stay PascalCase.
+// - Ids are cuid strings, except pure join tables (composite primary key) and the
+//   SiteSettings singleton (fixed id).
+// - Every table has created_at / updated_at. Content that the admin may want to
+//   recover uses soft delete (deleted_at).
+// - All public content is bilingual: one *Translation row per locale, unique per
+//   (parent, locale); slugs are unique per locale. A locale without a PUBLISHED
+//   translation is not shown on the public site.
+// - The `vector` extension is created by the init migration, not declared here.
 
 generator client {
   provider = "prisma-client"
@@ -8,4 +19,411 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  EDITOR
+
+  @@map("user_role")
+}
+
+enum Locale {
+  ES
+  EN
+
+  @@map("locale")
+}
+
+enum PublicationStatus {
+  DRAFT
+  PUBLISHED
+
+  @@map("publication_status")
+}
+
+/// Filters on the public site: SaaS, Ecommerce, Web + CMS, Herramientas, Plataforma.
+enum CaseType {
+  SAAS
+  ECOMMERCE
+  WEB_CMS
+  TOOL
+  PLATFORM
+
+  @@map("case_type")
+}
+
+/// Fixed list; the frontends translate the labels.
+enum TechnologyCategory {
+  FRONTEND
+  BACKEND
+  DATABASE
+  MOBILE
+  CLOUD
+  AI
+  OTHER
+
+  @@map("technology_category")
+}
+
+enum LeadSource {
+  CHAT_IA
+  FORM
+
+  @@map("lead_source")
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  PROPOSAL
+  WON
+  LOST
+
+  @@map("lead_status")
+}
+
+// ---------------------------------------------------------------------------
+// Users and sessions
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  /// Always stored lowercase (normalised by the API and the seed).
+  email        String    @unique
+  name         String
+  /// scrypt$N$r$p$salt$hash (see src/modules/auth/scrypt.ts). Never returned by the API.
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(EDITOR)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  refreshTokens RefreshToken[]
+  blogPosts     BlogPost[]
+
+  @@index([role])
+  @@map("users")
+}
+
+/// One row per refresh token (a session). Rotation links each token to the one that replaced it.
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  /// sha256 (hex) of the opaque token; the token itself is never stored.
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  replacedById String?   @unique @map("replaced_by_id")
+  userAgent    String?   @map("user_agent")
+  ip           String?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken? @relation("RefreshTokenRotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces   RefreshToken? @relation("RefreshTokenRotation")
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Cases
+// ---------------------------------------------------------------------------
+
+model Case {
+  id                     String    @id @default(cuid())
+  type                   CaseType
+  client                 String?
+  /// When true the public site and the AI assistant must not reveal `client`.
+  anonymizeClient        Boolean   @default(false) @map("anonymize_client")
+  year                   Int?
+  coverImageUrl          String?   @map("cover_image_url")
+  includeInKnowledgeBase Boolean   @default(true) @map("include_in_knowledge_base")
+  sortOrder              Int       @default(0) @map("sort_order")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+  deletedAt              DateTime? @map("deleted_at")
+
+  translations CaseTranslation[]
+  images       CaseImage[]
+  technologies CaseTechnology[]
+
+  @@index([type])
+  @@index([deletedAt, sortOrder])
+  @@map("cases")
+}
+
+model CaseTranslation {
+  id             String            @id @default(cuid())
+  caseId         String            @map("case_id")
+  locale         Locale
+  title          String
+  slug           String
+  /// Short line for listings and "Caso citado" cards, e.g. "SaaS · IA · Estudios contables".
+  tagline        String?
+  summary        String
+  industry       String?
+  /// Ordered array of CaseBlock (src/modules/cases/entities/case-block.entity.ts):
+  /// { type: "text", title, body } | { type: "gallery", imageIds, caption? } |
+  /// { type: "metrics", items: [{ value, label }] }
+  blocks         Json              @default("[]")
+  seoTitle       String?           @map("seo_title")
+  seoDescription String?           @map("seo_description") @db.VarChar(160)
+  status         PublicationStatus @default(DRAFT)
+  publishedAt    DateTime?         @map("published_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("case_translations")
+}
+
+/// Gallery images are shared by both locales; only the alt text is translated.
+model CaseImage {
+  id        String   @id @default(cuid())
+  caseId    String   @map("case_id")
+  url       String
+  /// { "ES": "...", "EN": "..." }
+  alt       Json     @default("{}")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, sortOrder])
+  @@map("case_images")
+}
+
+model CaseTechnology {
+  caseId       String   @map("case_id")
+  technologyId String   @map("technology_id")
+  /// Order of the "Tecnologías usadas" chips.
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  case       Case       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, technologyId])
+  @@index([technologyId])
+  @@map("case_technologies")
+}
+
+// ---------------------------------------------------------------------------
+// Technologies and services
+// ---------------------------------------------------------------------------
+
+model Technology {
+  id         String             @id @default(cuid())
+  /// Proper noun, not translated (".NET Core", "PostgreSQL").
+  name       String             @unique
+  slug       String             @unique
+  category   TechnologyCategory @default(OTHER)
+  /// Shown in the Home marquee.
+  isFeatured Boolean            @default(false) @map("is_featured")
+  sortOrder  Int                @default(0) @map("sort_order")
+  createdAt  DateTime           @default(now()) @map("created_at")
+  updatedAt  DateTime           @updatedAt @map("updated_at")
+  deletedAt  DateTime?          @map("deleted_at")
+
+  translations TechnologyTranslation[]
+  cases        CaseTechnology[]
+  services     ServiceTechnology[]
+
+  @@index([deletedAt, sortOrder])
+  @@index([category])
+  @@map("technologies")
+}
+
+/// Optional per-locale description for the /tecnologias page.
+model TechnologyTranslation {
+  id           String   @id @default(cuid())
+  technologyId String   @map("technology_id")
+  locale       Locale
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+
+  @@unique([technologyId, locale])
+  @@map("technology_translations")
+}
+
+model Service {
+  id        String    @id @default(cuid())
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  translations ServiceTranslation[]
+  technologies ServiceTechnology[]
+
+  @@index([deletedAt, sortOrder])
+  @@map("services")
+}
+
+model ServiceTranslation {
+  id          String            @id @default(cuid())
+  serviceId   String            @map("service_id")
+  locale      Locale
+  title       String
+  /// Anchor on /servicios (unique per locale).
+  slug        String
+  description String
+  status      PublicationStatus @default(DRAFT)
+  publishedAt DateTime?         @map("published_at")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("service_translations")
+}
+
+model ServiceTechnology {
+  serviceId    String   @map("service_id")
+  technologyId String   @map("technology_id")
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  service    Service    @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, technologyId])
+  @@index([technologyId])
+  @@map("service_technologies")
+}
+
+// ---------------------------------------------------------------------------
+// Blog
+// ---------------------------------------------------------------------------
+
+model BlogPost {
+  id            String    @id @default(cuid())
+  authorId      String?   @map("author_id")
+  coverImageUrl String?   @map("cover_image_url")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  author       User?                 @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  translations BlogPostTranslation[]
+
+  @@index([authorId])
+  @@index([deletedAt])
+  @@map("blog_posts")
+}
+
+model BlogPostTranslation {
+  id             String            @id @default(cuid())
+  blogPostId     String            @map("blog_post_id")
+  locale         Locale
+  title          String
+  slug           String
+  excerpt        String?
+  /// Markdown.
+  content        String
+  seoTitle       String?           @map("seo_title")
+  seoDescription String?           @map("seo_description") @db.VarChar(160)
+  status         PublicationStatus @default(DRAFT)
+  publishedAt    DateTime?         @map("published_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  blogPost BlogPost @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+
+  @@unique([blogPostId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status, publishedAt])
+  @@map("blog_post_translations")
+}
+
+// ---------------------------------------------------------------------------
+// Leads and analytics
+// ---------------------------------------------------------------------------
+
+model Lead {
+  id             String     @id @default(cuid())
+  source         LeadSource
+  status         LeadStatus @default(NEW)
+  name           String
+  email          String
+  phone          String?
+  interest       String?
+  /// What the visitor wrote (form message or AI summary).
+  message        String?
+  /// Internal notes from the team.
+  notes          String?
+  locale         Locale     @default(ES)
+  /// Conversation that produced the lead. The FK is added in Phase 4.
+  conversationId String?    @map("conversation_id")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  deletedAt      DateTime?  @map("deleted_at")
+
+  @@index([status, createdAt])
+  @@index([source])
+  @@index([email])
+  @@index([createdAt])
+  @@index([conversationId])
+  @@map("leads")
+}
+
+/// Visits aggregated per day, path and locale: recording a visit is an atomic
+/// upsert (count + 1). Keeps the table small and stores no personal data.
+model PageView {
+  id        String   @id @default(cuid())
+  /// Calendar day in the site timezone (America/Lima).
+  date      DateTime @db.Date
+  path      String
+  locale    Locale
+  count     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([date, path, locale])
+  @@index([date])
+  @@map("page_views")
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// Singleton: always the row with id "default".
+model SiteSettings {
+  id                     String   @id @default("default")
+  contactEmail           String   @map("contact_email")
+  /// E.164 without "+", as used by wa.me links (e.g. 51987654321).
+  whatsapp               String?
+  /// { "linkedin": url | null, "github": url | null, "instagram": url | null }
+  socialLinks            Json     @default("{}") @map("social_links")
+  /// Per weekday ("mon".."sun"): list of { start: "HH:mm", end: "HH:mm" }; [] = closed.
+  businessHours          Json     @map("business_hours")
+  timezone               String   @default("America/Lima")
+  meetingDurationMinutes Int      @default(30) @map("meeting_duration_minutes")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  @@map("site_settings")
 }

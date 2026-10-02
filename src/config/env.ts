@@ -16,6 +16,11 @@ const envSchema = z.object({
         .map((origin) => origin.trim())
         .filter(Boolean),
     ),
+  // HS256 key for access tokens. Generate one with:
+  // node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
+  JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   OBSERVE_APP_KEY: z.string().optional(),
   OBSERVE_APP_SECRET: z.string().optional(),
 });

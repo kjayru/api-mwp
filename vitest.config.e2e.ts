@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
+import { e2eEnv } from './test/e2e-env.js';
 
 export default defineConfig({
   plugins: [tsconfigPaths()],
@@ -7,9 +8,10 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.e2e-spec.ts'],
-    // The database is mocked in e2e tests; this only satisfies env validation.
-    env: {
-      DATABASE_URL: 'postgresql://test:test@localhost:5433/test',
-    },
+    // Creates mwp_test and applies the migrations (prisma migrate deploy).
+    globalSetup: ['./test/global-setup.ts'],
+    // The suites share one database and truncate it between tests.
+    fileParallelism: false,
+    env: e2eEnv,
   },
 });

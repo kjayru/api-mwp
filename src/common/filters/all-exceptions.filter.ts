@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
+import { STATUS_CODES } from 'node:http';
 
 export interface ErrorResponse {
   statusCode: number;
@@ -35,8 +36,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode = exception.getStatus();
       const response = exception.getResponse();
       if (typeof response === 'string') {
+        // e.g. ThrottlerException: use the standard reason phrase ("Too Many Requests").
         message = response;
-        error = exception.name;
+        error = STATUS_CODES[statusCode] ?? exception.name;
       } else {
         const body = response as {
           message?: string | string[];
