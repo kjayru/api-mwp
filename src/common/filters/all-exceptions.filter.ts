@@ -19,6 +19,28 @@ export interface ErrorResponse {
   details?: unknown;
 }
 
+/**
+ * A 4xx `http-errors` error (thrown by Express middleware such as body-parser)
+ * whose message is meant for the client (`expose: true`).
+ */
+function isExposedClientError(
+  exception: unknown,
+): exception is { status: number; message: string } {
+  if (typeof exception !== 'object' || exception === null) return false;
+  const { status, expose, message } = exception as {
+    status?: unknown;
+    expose?: unknown;
+    message?: unknown;
+  };
+  return (
+    typeof status === 'number' &&
+    status >= 400 &&
+    status < 500 &&
+    expose === true &&
+    typeof message === 'string'
+  );
+}
+
 /** Gives every error the same response shape and hides internals of unexpected ones. */
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -52,6 +74,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
         error = body.error ?? exception.name;
         details = body.details;
       }
+    } else if (isExposedClientError(exception)) {
+      // Express body-parser errors that Nest does not map (it only maps invalid
+      // JSON to 400), e.g. 413 for a body above the JSON limit.
+      statusCode = exception.status;
+      error = STATUS_CODES[statusCode] ?? 'Error';
+      message =
+        statusCode === HttpStatus.PAYLOAD_TOO_LARGE
+          ? 'El cuerpo de la petición es demasiado grande'
+          : exception.message;
     } else {
       this.logger.error(
         exception instanceof Error ? exception.stack : String(exception),

@@ -138,6 +138,7 @@ describe('AdminTechnologiesService', () => {
       'cases',
       'services',
       'stats',
+      'blog',
     ]);
   });
 

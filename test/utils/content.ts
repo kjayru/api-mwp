@@ -148,3 +148,81 @@ export async function createService(
   });
   return id;
 }
+
+export async function createUser(
+  prisma: PrismaService,
+  data: { id: string; name: string; role?: 'ADMIN' | 'EDITOR' },
+): Promise<string> {
+  await prisma.user.create({
+    data: {
+      id: data.id,
+      email: `${data.id}@miwebprofesional.com`,
+      name: data.name,
+      role: data.role ?? 'EDITOR',
+      passwordHash: 'not-a-real-hash',
+    },
+  });
+  return data.id;
+}
+
+export interface BlogTranslationFixture {
+  title: string;
+  slug: string;
+  excerpt?: string | null;
+  content?: string;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  status?: PublicationStatus;
+  publishedAt?: Date | null;
+}
+
+export async function createBlogPost(
+  prisma: PrismaService,
+  fixture: {
+    authorId?: string | null;
+    coverImageUrl?: string | null;
+    deleted?: boolean;
+    createdAt?: Date;
+    /** Technology ids in chip order. */
+    technologies?: string[];
+    translations: Partial<Record<Locale, BlogTranslationFixture>>;
+  },
+): Promise<string> {
+  const { id } = await prisma.blogPost.create({
+    data: {
+      authorId: fixture.authorId ?? null,
+      coverImageUrl: fixture.coverImageUrl ?? null,
+      deletedAt: fixture.deleted ? new Date() : null,
+      ...(fixture.createdAt ? { createdAt: fixture.createdAt } : {}),
+      technologies: {
+        create: (fixture.technologies ?? []).map((technologyId, index) => ({
+          technologyId,
+          sortOrder: index + 1,
+        })),
+      },
+      translations: {
+        create: Object.entries(fixture.translations).map(([locale, t]) => {
+          const status = t.status ?? 'PUBLISHED';
+          return {
+            locale: locale as Locale,
+            title: t.title,
+            slug: t.slug,
+            excerpt:
+              t.excerpt === undefined ? `Extracto de ${t.title}` : t.excerpt,
+            content: t.content ?? `# ${t.title}\n\nCuerpo del artículo.`,
+            seoTitle: t.seoTitle ?? null,
+            seoDescription: t.seoDescription ?? null,
+            status,
+            publishedAt:
+              t.publishedAt !== undefined
+                ? t.publishedAt
+                : status === 'PUBLISHED'
+                  ? new Date()
+                  : null,
+          };
+        }),
+      },
+    },
+  });
+  return id;
+}

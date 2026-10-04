@@ -15,7 +15,7 @@ cp .env.example .env # en Windows: copy .env.example .env
 # Edita .env: JWT_SECRET y SEED_ADMIN_PASSWORD son obligatorios (ver abajo)
 npm run db:up        # PostgreSQL 17 + pgvector en localhost:5433
 npm run db:deploy    # aplica las migraciones
-npm run db:seed      # admin, ajustes, tecnologías, servicios y los 5 casos (idempotente)
+npm run db:seed      # admin, ajustes, tecnologías, servicios, los 5 casos y el blog (idempotente)
 npm run start:dev    # http://localhost:3001/api/v1
 ```
 
@@ -73,7 +73,7 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 
 Esquema en `prisma/schema.prisma`; migración `20261002202732_phase2_domain_model`.
 
-- **Convenciones:** tablas y columnas en `snake_case` (`@@map`/`@map`) para que el SQL a mano de pgvector (Fase 4) sea legible; ids `cuid`; `created_at`/`updated_at` en todas las tablas; borrado lógico (`deleted_at`) en casos, tecnologías, servicios, blog y leads. Las tablas puente (`case_technologies`, `service_technologies`) usan clave primaria compuesta y guardan el orden de los chips.
+- **Convenciones:** tablas y columnas en `snake_case` (`@@map`/`@map`) para que el SQL a mano de pgvector (Fase 4) sea legible; ids `cuid`; `created_at`/`updated_at` en todas las tablas; borrado lógico (`deleted_at`) en casos, tecnologías, servicios, blog y leads. Las tablas puente (`case_technologies`, `service_technologies` y, desde la Fase 3.6, `blog_post_technologies`, migración `20261004213817_blog_technologies`) usan clave primaria compuesta y guardan el orden de los chips.
 - **Bilingüe ES/EN:** una fila `*Translation` por idioma (`@@unique([padre, locale])`), slug único por idioma y estado `DRAFT`/`PUBLISHED` + `publishedAt` por traducción. El sitio no muestra un idioma sin traducción publicada.
 - **Usuarios y sesiones:** `User` (`ADMIN` | `EDITOR`, email en minúsculas, `isActive`, `lastLoginAt`) y `RefreshToken` (solo el sha256 del token, `expiresAt`, `revokedAt`, `replacedById` para la rotación, `userAgent`, `ip`).
 - **Casos:** `Case` (tipo `SAAS | ECOMMERCE | WEB_CMS | TOOL | PLATFORM`, cliente, `anonymizeClient`, año, portada, `includeInKnowledgeBase`, orden) + `CaseTranslation` (título, slug, `tagline` para listados y la tarjeta "Caso citado", resumen, industria, `blocks`, SEO con `seoDescription` ≤ 160). `blocks` es un array JSON ordenado; tipos en `src/modules/cases/entities/case-block.entity.ts`:
@@ -94,12 +94,45 @@ Esquema en `prisma/schema.prisma`; migración `20261002202732_phase2_domain_mode
 
 - **Admin:** se crea con `SEED_ADMIN_*`. En ejecuciones posteriores solo se fuerzan `role = ADMIN` e `isActive = true`; la contraseña nunca se sobrescribe.
 - **SiteSettings:** se crea una vez; después se respetan los cambios hechos desde el admin.
-- **Tecnologías, servicios y casos:** solo se crean si no existen (claves naturales: slug de la tecnología y slug ES de la traducción). Lo que ya existe —editado o borrado desde el admin— no se toca, así que el seed se puede repetir en QA sin perder contenido.
+- **Tecnologías, servicios, casos y artículos del blog:** solo se crean si no existen (claves naturales: slug o nombre de la tecnología y slug ES de la traducción). Lo que ya existe —editado o borrado desde el admin— no se toca, así que el seed se puede repetir en QA sin perder contenido. Las tecnologías nuevas se añaden al final del orden actual.
+- **Blog:** ver "Seed del blog" más abajo.
 - Marcadores pendientes: `[completar]` (datos que aún no tenemos; nunca inventar resultados de clientes), `[N]` (métricas) y `[revisar]` (textos escritos para el seed, no del mockup).
+
+### Seed del blog
+
+Los artículos iniciales se leen de **`prisma/seed-content/blog/`** (código en `prisma/blog-content.ts`). Se crean **publicados en ES y EN**, con el admin (`SEED_ADMIN_EMAIL`) como autor, sus tecnologías en orden y la fecha del archivo como `publishedAt`. Como el resto del seed, es de solo creación: si el slug ES ya existe, el artículo no se toca. **Para cambiar un artículo ya sembrado, edítalo desde el admin** (o bórralo de la base y vuelve a ejecutar el seed).
+
+- **Archivos:** un par por artículo, `<clave>.es.md` y `<clave>.en.md`, donde `<clave>` es el slug ES. Los archivos que no siguen ese patrón se ignoran (el seed los lista).
+- **Formato:** un bloque de *frontmatter* entre dos líneas `---` y después el cuerpo en Markdown. **Cada línea del frontmatter es `clave: <valor JSON>`**: se lee con `JSON.parse`, no es YAML, así que los textos van entre comillas dobles. Se admiten líneas en blanco, BOM y finales de línea CRLF.
+
+  ```
+  ---
+  title: "Lo que cambió en Next.js 16"
+  slug: "lo-que-cambio-en-nextjs-16"
+  excerpt: "..."
+  seoTitle: "..."
+  seoDescription: "..."
+  technologies: ["nextjs", "react"]
+  publishedAt: "2026-09-12"
+  ---
+  Cuerpo en Markdown...
+  ```
+
+- **Reglas.** Si algo falla, el seed se detiene **antes de escribir nada** y lista cada problema con el nombre de su archivo.
+  - Claves permitidas: `title`, `slug`, `excerpt`, `seoTitle` (opcional), `seoDescription`, `technologies` y `publishedAt`. Una clave desconocida o repetida es un error.
+  - Obligatorias en los dos idiomas: `title` (≤ 200), `slug` (formato `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 120), `excerpt` (≤ 500), `seoDescription` (≤ 160) y un cuerpo no vacío (≤ 100 000 caracteres). `seoTitle` admite hasta 200.
+  - `technologies` y `publishedAt` son obligatorias en el archivo ES. En el EN pueden omitirse; si aparecen, deben coincidir con las del ES, que son las que se usan.
+  - `technologies`: slugs de tecnologías que existan en `seed-data.ts` o en la base, sin repetir (máximo 20).
+  - `publishedAt`: `AAAA-MM-DD` (medianoche UTC) o una fecha-hora ISO 8601 válida.
+  - El nombre del archivo ES debe coincidir con su `slug`, tienen que existir los dos idiomas y un slug no puede repetirse entre artículos del mismo idioma.
+- Si la carpeta no existe o no tiene artículos, el seed lo indica y sigue. Al terminar escribe `blog posts: X created, Y kept`.
+- Los tests usan sus propios archivos, con el mismo formato, en `test/fixtures/blog/`.
 
 ## API de contenido (Fase 3)
 
-Contrato completo para front-mwp y admin-mwp en **[docs/API.md](docs/API.md)**: endpoints públicos (`/cases`, `/cases/:slug`, `/technologies`, `/services`, `/stats`), administración de casos, tecnologías y servicios, subida de imágenes y el webhook de revalidación del front.
+Contrato completo para front-mwp y admin-mwp en **[docs/API.md](docs/API.md)**: endpoints públicos (`/cases`, `/cases/:slug`, `/technologies`, `/services`, `/stats`, `/blog`, `/blog/:slug`), administración de casos, tecnologías, servicios y blog, subida de imágenes y el webhook de revalidación del front.
+
+- **Blog (Fase 3.6, sección 9 de API.md):** artículos en Markdown por idioma, con portada, autor (quien lo crea) y tecnologías. Para publicar hacen falta título, slug, extracto y contenido. El sitio recibe el Markdown sin procesar, `readingMinutes` (lo calcula la API sin contar los bloques de código) y `previous`/`next` sin vuelta circular. Etiquetas de revalidación: `blog` y `post:<slug>`. Los cuerpos JSON admiten hasta 1 MB.
 
 - **Públicos:** solo contenido publicado en el idioma pedido (`?locale=es|en`, obligatorio), con `Cache-Control: public, max-age=60`.
 - **Admin** (`/admin/...`): roles `ADMIN` y `EDITOR`. Publicación por idioma con validación (422 con los campos que faltan). Borrado lógico y orden con `PUT /admin/<recurso>/order`.

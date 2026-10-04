@@ -10,6 +10,7 @@ import {
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { accessToken, bearer } from './utils/auth.js';
 import {
+  createBlogPost,
   createCase,
   createService,
   createTechnology,
@@ -157,6 +158,7 @@ describe('Front revalidation webhook (e2e)', () => {
       'cases',
       'services',
       'stats',
+      'blog',
     ]);
 
     const service = await createService(prisma, {
@@ -170,14 +172,83 @@ describe('Front revalidation webhook (e2e)', () => {
     expect((await hit).body.tags).toEqual(['services']);
   });
 
-  it('creating a draft case sends nothing', async () => {
+  it('creating a draft case or blog post sends nothing', async () => {
     await http()
       .post('/api/v1/admin/cases')
       .set(editor)
       .send({ type: 'SAAS', translations: { ES: { title: 'Borrador' } } })
       .expect(201);
+    await http()
+      .post('/api/v1/admin/blog')
+      .set(editor)
+      .send({ translations: { ES: { title: 'Borrador' } } })
+      .expect(201);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(hits).toEqual([]);
+  });
+
+  it('blog mutations send blog and post:<slug> for every slug, old and new', async () => {
+    const id = await createBlogPost(prisma, {
+      translations: {
+        ES: { title: 'Artículo', slug: 'articulo', status: 'DRAFT' },
+        EN: { title: 'Post', slug: 'post', status: 'DRAFT' },
+      },
+    });
+
+    let hit = nextHit();
+    await http()
+      .post(`/api/v1/admin/blog/${id}/publish`)
+      .set(editor)
+      .send({ locale: 'ES' })
+      .expect(200);
+    const published = await hit;
+    expect(published.headers['x-revalidate-secret']).toBe(SECRET);
+    expect(published.body.tags.sort()).toEqual([
+      'blog',
+      'post:articulo',
+      'post:post',
+    ]);
+
+    hit = nextHit();
+    await http()
+      .patch(`/api/v1/admin/blog/${id}`)
+      .set(editor)
+      .send({ translations: { ES: { slug: 'articulo-nuevo' } } })
+      .expect(200);
+    expect((await hit).body.tags.sort()).toEqual([
+      'blog',
+      'post:articulo',
+      'post:articulo-nuevo',
+      'post:post',
+    ]);
+
+    hit = nextHit();
+    await http()
+      .patch(`/api/v1/admin/blog/${id}`)
+      .set(editor)
+      .send({ coverImageUrl: 'http://localhost:3001/uploads/a.webp' })
+      .expect(200);
+    expect((await hit).body.tags.sort()).toEqual([
+      'blog',
+      'post:articulo-nuevo',
+      'post:post',
+    ]);
+
+    hit = nextHit();
+    await http()
+      .post(`/api/v1/admin/blog/${id}/unpublish`)
+      .set(editor)
+      .send({ locale: 'ES' })
+      .expect(200);
+    expect((await hit).body.tags).toContain('post:articulo-nuevo');
+
+    hit = nextHit();
+    await http().delete(`/api/v1/admin/blog/${id}`).set(editor).expect(204);
+    expect((await hit).body.tags.sort()).toEqual([
+      'blog',
+      'post:articulo-nuevo',
+      'post:post',
+    ]);
   });
 
   it('a failing front never fails the admin request', async () => {

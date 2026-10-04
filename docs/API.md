@@ -1,9 +1,9 @@
-# api-mwp: content API contract (Phase 3)
+# api-mwp: content API contract (Phases 3 and 3.6)
 
-This is the contract for **front-mwp** (public site) and **admin-mwp** (admin panel): cases, technologies, services, stats, image uploads and the front revalidation webhook. Auth (`/auth/*`) is documented in the README.
+This is the contract for **front-mwp** (public site) and **admin-mwp** (admin panel): cases, technologies, services, stats, the blog (Phase 3.6), image uploads and the front revalidation webhook. Auth (`/auth/*`) is documented in the README.
 
 - Base URL: `http://localhost:3001/api/v1` in development and `https://api.miwebprofesional.com/api/v1` in QA. All paths below are relative to it, except `/uploads/...`, which lives at the server root.
-- JSON in and out (`Content-Type: application/json`), except the upload (multipart).
+- JSON in and out (`Content-Type: application/json`), except the upload (multipart). JSON bodies may be up to **1 MB** (a blog post carries up to 100 000 characters of Markdown); larger bodies get **413**.
 - Dates are ISO 8601 strings in UTC, e.g. `"2026-10-02T20:32:56.714Z"`.
 - Ids are opaque strings (cuid). Never parse them.
 - Unknown query parameters and unknown body properties are rejected with **400**: the API validates with `whitelist` and `forbidNonWhitelisted`. Send only the documented fields.
@@ -18,6 +18,7 @@ This is the contract for **front-mwp** (public site) and **admin-mwp** (admin pa
 6. [Admin: uploads and `/uploads`](#6-uploads)
 7. [Front revalidation webhook](#7-front-revalidation-webhook)
 8. [Endpoint summary](#8-endpoint-summary)
+9. [Blog](#9-blog): `GET /blog`, `GET /blog/:slug` and `/admin/blog`
 
 ---
 
@@ -67,7 +68,7 @@ Every error, from any endpoint, has this shape:
 | 403 | Authenticated, but the role is not allowed (every endpoint here allows `ADMIN` and `EDITOR`) |
 | 404 | Unknown or soft-deleted id, or a slug that is not published in that locale |
 | 409 | Slug or technology name already in use |
-| 413 | Upload larger than 5 MB |
+| 413 | Upload larger than 5 MB, or a JSON body larger than 1 MB |
 | 422 | Publishing an incomplete translation, or editing a published translation so that it becomes incomplete |
 
 ### Auth
@@ -86,9 +87,11 @@ Every error, from any endpoint, has this shape:
 
 Public lists are ordered by `sortOrder` ascending, then `createdAt` ascending. Admin lists use the same order unless you pass `sort`. The admin sets the order with `PUT /admin/<resource>/order` (positions 1..n).
 
+The **blog** is the exception: it has no `sortOrder`. Posts are ordered by publication date, newest first (section 9).
+
 ### Soft delete
 
-`DELETE` on cases, technologies and services sets `deletedAt`. Deleted rows disappear from **every** endpoint: public and admin GETs return 404 for them and lists skip them. There is no restore endpoint yet. A deleted row keeps its slug (and a technology keeps its name), so reusing them gives **409** with a message that says the owner was deleted.
+`DELETE` on cases, technologies, services and blog posts sets `deletedAt`. Deleted rows disappear from **every** endpoint: public and admin GETs return 404 for them and lists skip them. There is no restore endpoint yet. A deleted row keeps its slug (and a technology keeps its name), so reusing them gives **409** with a message that says the owner was deleted.
 
 ---
 
@@ -101,6 +104,8 @@ These endpoints return published content only:
 - `client` is never visible when `anonymizeClient` is true.
 
 Technologies have no publish status: every non-deleted technology is public.
+
+The public blog endpoints (`GET /blog`, `GET /blog/:slug`) follow the same rules; they are documented in [section 9](#9-blog).
 
 ### `GET /cases?locale=es|en[&type=...]`
 
@@ -622,6 +627,8 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | `technologies` | `GET /technologies` |
 | `services` | `GET /services` |
 | `stats` | `GET /stats` |
+| `blog` | `GET /blog` (every page) **and** every `GET /blog/:slug`, because the detail embeds `previous`/`next` and chips that depend on other posts and on technologies |
+| `post:<slug>` | `GET /blog/<slug>` (the same tag in both locales; ES and EN slugs may differ) |
 
 ### Tags sent per mutation
 
@@ -631,9 +638,11 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | `PUT /admin/cases/order` | `cases`, `stats` |
 | `POST /admin/cases` | none (a new case is a draft) |
 | `POST /admin/technologies`, `PUT /admin/technologies/order` | `technologies` |
-| `PATCH /admin/technologies/:id`, `DELETE /admin/technologies/:id` | `technologies`, `cases`, `services`, `stats` (names and slugs appear in chips; deletion changes the stats) |
+| `PATCH /admin/technologies/:id`, `DELETE /admin/technologies/:id` | `technologies`, `cases`, `services`, `stats`, `blog` (names and slugs appear in chips; deletion changes the stats) |
 | `PATCH /admin/services/:id`, publish, unpublish, `DELETE`, `PUT /admin/services/order` | `services` |
 | `POST /admin/services` | none (draft) |
+| `PATCH /admin/blog/:id` (any field: text, slug, cover, technologies), publish, unpublish, `DELETE` | `blog` and `post:<slug>` for **every** slug of the post (both locales, any status). On a slug change, both the old and the new slug are sent |
+| `POST /admin/blog` | none (a new post is a draft) |
 
 ### Environment
 
@@ -653,6 +662,8 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | GET | `/technologies?locale&featured` | public | 200 `{ data }` |
 | GET | `/services?locale` | public | 200 `{ data }` |
 | GET | `/stats` | public | 200 |
+| GET | `/blog?locale&page&limit` | public | 200 `{ data, meta }` |
+| GET | `/blog/:slug?locale` | public | 200 detail |
 | GET | `/admin/cases` | ADMIN, EDITOR | 200 `{ data, meta }` |
 | GET | `/admin/cases/:id` | ADMIN, EDITOR | 200 |
 | POST | `/admin/cases` | ADMIN, EDITOR | 201 |
@@ -679,4 +690,237 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | DELETE | `/admin/services/:id` | ADMIN, EDITOR | 204 |
 | PUT | `/admin/services/order` | ADMIN, EDITOR | 204 |
 | POST | `/admin/uploads` | ADMIN, EDITOR | 201 `{ url, contentType, size }` |
+| GET | `/admin/blog` | ADMIN, EDITOR | 200 `{ data, meta }` |
+| GET | `/admin/blog/:id` | ADMIN, EDITOR | 200 |
+| POST | `/admin/blog` | ADMIN, EDITOR | 201 |
+| PATCH | `/admin/blog/:id` | ADMIN, EDITOR | 200 |
+| POST | `/admin/blog/:id/publish` | ADMIN, EDITOR | 200 |
+| POST | `/admin/blog/:id/unpublish` | ADMIN, EDITOR | 200 |
+| DELETE | `/admin/blog/:id` | ADMIN, EDITOR | 204 |
 | GET | `/uploads/<path>` (no `/api` prefix) | public | 200 file |
+
+---
+
+## 9. Blog
+
+Markdown posts, bilingual and published **per locale**, like cases. Each post has a cover, an author (the user who created it) and technology chips shared by both locales. Added in Phase 3.6; the seed loads the initial posts from Markdown files (see the README).
+
+### `GET /blog?locale=es|en[&page=1&limit=12]` (public)
+
+| Query | Required | Values |
+|---|---|---|
+| `locale` | yes | `es` \| `en` |
+| `page` | no | integer ≥ 1, default 1 |
+| `limit` | no | 1–50, default **12** |
+
+**200** (`Cache-Control: public, max-age=60`)
+
+```json
+{
+  "data": [
+    {
+      "slug": "lo-que-cambio-en-nextjs-16",
+      "title": "Lo que cambió en Next.js 16: proxy.ts, params asíncronos y caché por etiquetas",
+      "excerpt": "Qué cambió al migrar este sitio a Next.js 16...",
+      "coverImageUrl": "http://localhost:3001/uploads/2026/10/4f1c...e2.webp",
+      "publishedAt": "2026-09-12T00:00:00.000Z",
+      "readingMinutes": 6,
+      "author": { "name": "Wile" },
+      "technologies": [
+        { "name": "Next.js", "slug": "nextjs" },
+        { "name": "React", "slug": "react" }
+      ]
+    }
+  ],
+  "meta": { "page": 1, "limit": 12, "total": 6 }
+}
+```
+
+- Only translations **published in that locale** of non-deleted posts. A post published only in ES does not appear in `?locale=en`.
+- Order: `publishedAt` descending (newest first), then the post's `createdAt` descending.
+- `publishedAt` is the first publication of this locale (republishing keeps it). Seeded posts carry the date of their file.
+- `readingMinutes` is computed by the API from the Markdown: `ceil(words / 200)`, at least 1. Fenced code blocks (backtick or tilde fences), HTML tags, link and image targets, bare URLs and markup characters are not counted; link texts, image alt texts and inline code are.
+- `author` is `null` when the author's user no longer exists. `coverImageUrl` may be `null`. `technologies` lists non-deleted technologies in chip order (may be `[]`).
+- A page past the end returns `data: []` with the real `total`.
+- **400** for a missing or invalid `locale`, `page < 1`, `limit` outside 1–50, or any other query parameter.
+
+### `GET /blog/:slug?locale=es|en` (public)
+
+The slug belongs to the requested locale.
+
+**200**: every list field, plus:
+
+```json
+{
+  "slug": "lo-que-cambio-en-nextjs-16",
+  "title": "Lo que cambió en Next.js 16: proxy.ts, params asíncronos y caché por etiquetas",
+  "excerpt": "...",
+  "coverImageUrl": null,
+  "publishedAt": "2026-09-12T00:00:00.000Z",
+  "readingMinutes": 6,
+  "author": { "name": "Wile" },
+  "technologies": [{ "name": "Next.js", "slug": "nextjs" }],
+  "content": "## Por qué migramos\n\nNext.js 16 renombra `middleware.ts` a `proxy.ts`...\n\n```ts\nexport function proxy(request: NextRequest) { ... }\n```",
+  "updatedAt": "2026-10-04T18:20:11.512Z",
+  "seoTitle": null,
+  "seoDescription": "Qué cambió en Next.js 16 y cómo lo aplicamos en un sitio real.",
+  "alternates": { "es": "lo-que-cambio-en-nextjs-16", "en": "what-changed-in-nextjs-16" },
+  "previous": { "slug": "nestjs-12-prisma-7-con-esm", "title": "NestJS 12 + Prisma 7 con ESM: cómo arrancamos una API" },
+  "next": null
+}
+```
+
+| Field | Notes |
+|---|---|
+| `content` | **Raw Markdown** (GFM: tables, fenced code with a language). Render it on the server and **do not allow raw HTML** in it |
+| `updatedAt` | Last edit of the post (text of any locale, cover, technologies, publication). Use it as `dateModified` |
+| `seoTitle`, `seoDescription` | `null` when not set. `seoDescription` ≤ 160 characters. Fall back to `title` and `excerpt` |
+| `alternates` | Slug of each locale, or `null` when that locale is **not published**. Use it for the language switch and `hreflang` |
+| `previous` | The next **older** published post of this locale, or `null` for the oldest |
+| `next` | The next **newer** published post of this locale, or `null` for the newest. There is no wraparound |
+
+**404** `"Artículo no encontrado"` when the slug does not exist in that locale, is a draft, or its post is deleted. **400** for a missing or invalid `locale`.
+
+### Admin shapes
+
+**AdminBlogPost**: returned by `GET /admin/blog/:id`, POST, PATCH, publish and unpublish:
+
+```json
+{
+  "id": "cmuud0ig00006akuqbarhwbwz",
+  "coverImageUrl": "http://localhost:3001/uploads/2026/10/cover.webp",
+  "technologyIds": ["cmtechnext...", "cmtechreact..."],
+  "author": { "name": "Wile" },
+  "translations": {
+    "ES": {
+      "title": "Lo que cambió en Next.js 16",
+      "slug": "lo-que-cambio-en-nextjs-16",
+      "excerpt": "Qué cambió al migrar este sitio...",
+      "content": "## Por qué migramos\n\n...",
+      "seoTitle": null,
+      "seoDescription": "Qué cambió en Next.js 16...",
+      "status": "PUBLISHED",
+      "publishedAt": "2026-09-12T00:00:00.000Z"
+    },
+    "EN": null
+  },
+  "createdAt": "2026-10-04T18:00:00.000Z",
+  "updatedAt": "2026-10-04T18:20:11.512Z"
+}
+```
+
+- `translations.ES` / `translations.EN` are always present; a missing locale is `null`. `excerpt`, `seoTitle` and `seoDescription` may be `null`; `content` is `""` until written.
+- `author` is `null` when the user no longer exists. It is set on creation and never changes.
+- `technologyIds`: non-deleted technologies, in chip order.
+
+### `GET /admin/blog`
+
+| Query | Default | Values |
+|---|---|---|
+| `page` | 1 | integer ≥ 1 |
+| `limit` | 20 | 1–100 |
+| `q` | | Case-insensitive search in the **titles of both locales** (≤ 200 characters) |
+| `status` | | `draft` \| `published`: matches when **any** locale has that status |
+| `sort` | `updatedAt` | `updatedAt` \| `publishedAt` \| `title`. `title` and `publishedAt` use the ES value, falling back to EN. With `publishedAt`, posts never published go **last** in both directions |
+| `order` | `desc` (`asc` for `title`) | `asc` \| `desc` |
+
+**200**
+
+```json
+{
+  "data": [
+    {
+      "id": "cmuud0ig00006akuqbarhwbwz",
+      "coverImageUrl": null,
+      "updatedAt": "2026-10-04T18:20:11.512Z",
+      "author": { "name": "Wile" },
+      "translations": {
+        "ES": { "title": "Lo que cambió en Next.js 16", "slug": "lo-que-cambio-en-nextjs-16", "status": "PUBLISHED", "publishedAt": "2026-09-12T00:00:00.000Z" },
+        "EN": { "title": "What changed in Next.js 16", "slug": "what-changed-in-nextjs-16", "status": "DRAFT", "publishedAt": null }
+      }
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 6 }
+}
+```
+
+Deleted posts are not listed. **400** for invalid query values.
+
+### `GET /admin/blog/:id`
+
+**200** AdminBlogPost. **404** `"Artículo no encontrado"` for an unknown or deleted id.
+
+### `POST /admin/blog`
+
+Minimal body: the admin creates the post and then opens its editor.
+
+```json
+{ "translations": { "ES": { "title": "Sesiones seguras en Next.js", "slug": "sesiones-seguras-en-nextjs" } } }
+```
+
+| Field | Rules |
+|---|---|
+| `translations` | Object with `ES` and/or `EN`. **At least one** is required. No other top-level field is accepted |
+| `translations.<L>.title` | Required, trimmed, 1–200 characters |
+| `translations.<L>.slug` | Optional. Format `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 120. Generated from the title when omitted (`-2`, `-3`... if taken in that locale) |
+
+The author is the authenticated user. Every locale starts as a `DRAFT` with `excerpt: null`, `content: ""` and no SEO; no cover and no technologies.
+
+**201** AdminBlogPost. **400** for validation errors. **409** when an explicit slug is taken: `"El slug \"x\" ya está en uso en otro artículo (ES)"`, or `"El slug \"x\" (ES) lo usa un artículo eliminado; elige otro"`.
+
+### `PATCH /admin/blog/:id`
+
+Partial update: send only what changed. `null` clears a nullable field; omitted fields stay as they are.
+
+```json
+{
+  "coverImageUrl": "http://localhost:3001/uploads/2026/10/cover.webp",
+  "technologyIds": ["cmtechnext...", "cmtechreact..."],
+  "translations": {
+    "ES": {
+      "title": "Lo que cambió en Next.js 16",
+      "slug": "lo-que-cambio-en-nextjs-16",
+      "excerpt": "Qué cambió al migrar este sitio...",
+      "content": "## Por qué migramos\n\n...",
+      "seoTitle": null,
+      "seoDescription": "Qué cambió en Next.js 16..."
+    },
+    "EN": { "title": "What changed in Next.js 16" }
+  }
+}
+```
+
+| Field | Type | Nullable |
+|---|---|---|
+| `coverImageUrl` | http(s) URL ≤ 2048 (usually from `/admin/uploads`) | yes |
+| `technologyIds` | string[] ≤ 20, no repeats, existing non-deleted technologies. **Replaces** the list in this chip order | no |
+| `translations.<L>.title` | 1–200 | no |
+| `translations.<L>.slug` | slug format ≤ 120 | no |
+| `translations.<L>.excerpt` | ≤ 500 | yes |
+| `translations.<L>.content` | Markdown, ≤ **100 000** characters (may be `""`). Stored as sent: **not trimmed** | no |
+| `translations.<L>.seoTitle` | ≤ 200 | yes |
+| `translations.<L>.seoDescription` | ≤ 160 | yes |
+
+- Strings are trimmed (except `content`). `""` in a nullable field is stored as `null`.
+- **A missing locale is created** as a `DRAFT` when `translations.<L>` is sent; `title` is then required (400 otherwise) and the slug is generated when omitted.
+- **Editing a PUBLISHED translation keeps it published**, so it must stay complete: if the edit would leave it without title, slug, excerpt or content, the request fails with **422** and nothing is saved: `"La versión ES está publicada y no puede quedar incompleta. Falta: contenido"` with `details: { "locale": "ES", "missing": ["content"] }`. Unpublish first to empty it.
+- The update is atomic: on any error, nothing is saved.
+
+**200** AdminBlogPost. **400** for validation errors (including unknown `technologyIds`). **404**. **409** when the slug is taken in that locale. **413** `"El cuerpo de la petición es demasiado grande"` when the JSON body exceeds 1 MB. **422** as described above.
+
+### `POST /admin/blog/:id/publish` · `POST /admin/blog/:id/unpublish`
+
+Body: `{ "locale": "ES" | "EN" }` (lowercase also accepted).
+
+- **publish**: the locale needs a non-empty `title`, `slug`, `excerpt` and `content`. Otherwise **422** `"No se puede publicar la versión EN. Falta: extracto, contenido"` with `details: { "locale": "EN", "missing": ["excerpt", "content"] }`. `missing` uses the API names (`title`, `slug`, `excerpt`, `content`); the message uses the Spanish labels (título, slug, extracto, contenido). A locale that does not exist returns 422 listing all four. On success the locale becomes `PUBLISHED`, and `publishedAt` is set **only the first time**. Publishing an already published locale is idempotent.
+- **unpublish**: sets `DRAFT` and keeps `publishedAt`. **404** `"El artículo no tiene versión EN"` when the locale does not exist.
+
+**200** AdminBlogPost. **400** for an invalid locale. **404** for an unknown post.
+
+### `DELETE /admin/blog/:id`
+
+Soft delete. **204** with no body. **404** for an unknown or already deleted id. The slugs stay reserved (**409** if reused).
+
+### Revalidation
+
+Every blog mutation except `POST /admin/blog` sends `blog` plus `post:<slug>` for every slug of the post (old and new on a slug change); see [section 7](#7-front-revalidation-webhook). The front should tag `GET /blog` with `blog`, and `GET /blog/:slug` with both `blog` and `post:<slug>`.

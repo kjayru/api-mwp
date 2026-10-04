@@ -4,6 +4,7 @@ import { validateEnv } from './config/env.js';
 import { HealthModule } from './health/health.module.js';
 import { RevalidationModule } from './common/revalidation/revalidation.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { BlogModule } from './modules/blog/blog.module.js';
 import { CasesModule } from './modules/cases/cases.module.js';
 import { ServicesModule } from './modules/services/services.module.js';
 import { StatsModule } from './modules/stats/stats.module.js';
@@ -29,6 +30,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     CasesModule,
     TechnologiesModule,
     ServicesModule,
+    BlogModule,
     StatsModule,
     UploadsModule,
     // Distributed tracing, logs and metrics: https://observe.nestjs.com

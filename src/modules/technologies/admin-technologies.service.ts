@@ -187,13 +187,14 @@ export class AdminTechnologiesService {
     void this.revalidation.revalidate([RevalidationTag.technologies]);
   }
 
-  /** Name and slug show up in case and service chips and in the stats. */
+  /** Name and slug show up in case, service and blog chips and in the stats. */
   private notifyUsedEverywhere(): void {
     void this.revalidation.revalidate([
       RevalidationTag.technologies,
       RevalidationTag.cases,
       RevalidationTag.services,
       RevalidationTag.stats,
+      RevalidationTag.blog,
     ]);
   }
 

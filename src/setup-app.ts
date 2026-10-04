@@ -8,6 +8,7 @@ import type { Env } from './config/env.js';
 import { uploadsRoot } from './modules/uploads/storage/local-file-storage.js';
 
 export const UPLOADS_ROUTE = '/uploads';
+export const JSON_BODY_LIMIT = '1mb';
 
 /** Global HTTP setup shared by main.ts and the e2e tests. Routes end up as /api/v1/... */
 export function setupApp(app: NestExpressApplication): void {
@@ -19,6 +20,10 @@ export function setupApp(app: NestExpressApplication): void {
     origin: config.get('CORS_ORIGINS', { infer: true }),
     credentials: true,
   });
+  // Express defaults to 100 kB; a blog post may carry up to 100 000 characters
+  // of Markdown (more bytes once UTF-8 and JSON-escaped). Registered before
+  // init, so Nest skips its default JSON parser.
+  app.useBodyParser('json', { limit: JSON_BODY_LIMIT });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

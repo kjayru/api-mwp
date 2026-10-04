@@ -243,6 +243,7 @@ model Technology {
   translations TechnologyTranslation[]
   cases        CaseTechnology[]
   services     ServiceTechnology[]
+  blogPosts    BlogPostTechnology[]
 
   @@index([deletedAt, sortOrder])
   @@index([category])
@@ -328,6 +329,7 @@ model BlogPost {
 
   author       User?                 @relation(fields: [authorId], references: [id], onDelete: SetNull)
   translations BlogPostTranslation[]
+  technologies BlogPostTechnology[]
 
   @@index([authorId])
   @@index([deletedAt])
@@ -356,6 +358,23 @@ model BlogPostTranslation {
   @@unique([locale, slug])
   @@index([locale, status, publishedAt])
   @@map("blog_post_translations")
+}
+
+/// Technology chips of a post (shared by both locales), linking to /tecnologias.
+model BlogPostTechnology {
+  blogPostId   String   @map("blog_post_id")
+  technologyId String   @map("technology_id")
+  /// Order of the chips.
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  blogPost   BlogPost   @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+
+  @@id([blogPostId, technologyId])
+  @@index([technologyId])
+  @@map("blog_post_technologies")
 }
 
 // ---------------------------------------------------------------------------

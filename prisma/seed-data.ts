@@ -42,6 +42,28 @@ export const technologies: TechnologySeed[] = [
   },
   { name: 'React', slug: 'react', category: 'FRONTEND', isFeatured: false },
   { name: 'Prisma', slug: 'prisma', category: 'BACKEND', isFeatured: false },
+  // Added in Phase 3.6 for the blog post chips.
+  {
+    name: 'Tailwind CSS',
+    slug: 'tailwind-css',
+    category: 'FRONTEND',
+    isFeatured: false,
+  },
+  {
+    name: 'Three.js',
+    slug: 'threejs',
+    category: 'FRONTEND',
+    isFeatured: false,
+  },
+  { name: 'GSAP', slug: 'gsap', category: 'FRONTEND', isFeatured: false },
+  {
+    name: 'pgvector',
+    slug: 'pgvector',
+    category: 'DATABASE',
+    isFeatured: false,
+  },
+  { name: 'Claude', slug: 'claude', category: 'AI', isFeatured: false },
+  { name: 'Voyage AI', slug: 'voyage-ai', category: 'AI', isFeatured: false },
 ];
 
 interface ServiceTranslationSeed {
