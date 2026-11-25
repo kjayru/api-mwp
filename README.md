@@ -29,6 +29,7 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 |---|---|---|---|
 | `NODE_ENV` | no | `development` | `development`, `test` o `production` |
 | `PORT` | no | `3001` | Puerto HTTP |
+| `TRUST_PROXY` | no | `loopback` | `trust proxy` de Express: de qué proxies se acepta `X-Forwarded-For` (`req.ip` de los límites por IP). `false`, `true`, un número de saltos o una lista de IPs/subredes separadas por comas (`loopback`, `linklocal`, `uniquelocal` incluidos). `false` si la API se expone sin proxy |
 | `DATABASE_URL` | sí | — | PostgreSQL (`postgresql://...`) |
 | `CORS_ORIGINS` | no | `http://localhost:3000,http://localhost:3002` | Orígenes permitidos, separados por comas |
 | `JWT_SECRET` | sí | — | Clave HS256 de los access tokens, mínimo 32 caracteres. Genera una con `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"` |
@@ -47,6 +48,9 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 | `VOYAGE_MODEL` | no | `voyage-3.5` | Modelo multilingüe de Voyage. Debe devolver vectores de **1024** dimensiones (columna `vector(1024)`): `voyage-3.5`, `voyage-3.5-lite` o la familia `voyage-4`. Cambiarlo exige "Reindexar ahora" |
 | `KNOWLEDGE_MIN_SIMILARITY` | no | `0.5` | Similitud coseno mínima (0–1) para que un fragmento cuente como relevante. Por debajo, `buscar_casos` no devuelve nada y la pregunta se marca "sin respuesta" |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | no (las tres o ninguna) | — | Google Calendar (OAuth 2.0 con acceso offline de la cuenta del estudio; scopes `calendar.events` y `calendar.freebusy`). Sin ellas `agendar_reunion` guarda una reunión `REQUESTED` y el equipo la confirma por email |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | no (las cinco o ninguna) | — | Cuenta SMTP que avisa por email a `SiteSettings.contactEmail` de cada lead nuevo (docs/API.md 11.2). Sin ellas solo se registra en el log |
+| `SMTP_SECURE` | no | `true` en el puerto 465 | TLS implícito (`true`/`false`); si no, STARTTLS |
+| `ADMIN_URL` | no | `http://localhost:3002` | URL de admin-mwp para el enlace del email (`<ADMIN_URL>/leads/<id>`) |
 
 ## Puertos del workspace
 
@@ -182,11 +186,12 @@ Todas las rutas están bajo `/api/v1`. Un `JwtAuthGuard` global protege **todas*
 | `POST /auth/refresh` | pública | `{ "refreshToken": string }` | **200** `AuthResponse` (rota el refresh token) · **401** token desconocido, expirado o ya usado · **400** |
 | `POST /auth/logout` | pública | `{ "refreshToken": string }` | **204** sin cuerpo, siempre (idempotente, también para tokens desconocidos) · **400** |
 | `GET /auth/me` | `Authorization: Bearer <accessToken>` | — | **200** `{ id, email, name, role }` · **401** |
+| `POST /auth/password` | `Authorization: Bearer <accessToken>` | `{ "currentPassword": string, "newPassword": string }` (12–128) | **204** y revoca las demás sesiones · **400** `invalid_password` / `same_password` (en `details.reason`) o cuerpo inválido · **401** (docs/API.md 11.6) |
 
 ```jsonc
 // AuthResponse
 {
-  "accessToken": "eyJ...",              // JWT HS256: sub, email, role; 15 min
+  "accessToken": "eyJ...",              // JWT HS256: sub, email, role, sid (sesión); 15 min
   "accessTokenExpiresIn": 900,           // segundos
   "refreshToken": "7hJexFDu...",         // opaco, 43 caracteres base64url; 7 días
   "refreshTokenExpiresAt": "2026-10-09T20:38:31.886Z",
@@ -199,7 +204,7 @@ Comportamiento a tener en cuenta en los clientes:
 - **Rotación:** cada `refresh` revoca el token presentado y devuelve uno nuevo; guarda siempre el último.
 - **Reutilización = robo:** presentar un refresh token ya revocado (por rotación o logout) revoca **todas** las sesiones activas del usuario y responde 401. Dos refresh simultáneos con el mismo token cuentan como reutilización: serializa los refresh en el cliente (una sola petición en vuelo).
 - El email no distingue mayúsculas. Las contraseñas se guardan con scrypt (`scrypt$N$r$p$salt$hash`, `node:crypto`); el refresh token solo como sha256.
-- El límite de login se guarda en memoria (por instancia) y usa `req.ip`; detrás de un proxy habrá que configurar `trust proxy` (Fase 7).
+- El límite de login se guarda en memoria (por instancia) y usa `req.ip`, que detrás de Apache es la IP del visitante gracias a `TRUST_PROXY` (por defecto `loopback`).
 
 ## Tests
 

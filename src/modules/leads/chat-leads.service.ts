@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Lead } from '../../generated/prisma/client.js';
 import type { Locale } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 export interface ChatLeadInput {
   name: string;
@@ -23,16 +24,33 @@ export interface UpsertOptions {
 /**
  * Leads that come from the AI chat (source CHAT_IA). One lead per
  * conversation: calling it again updates that lead instead of duplicating it.
+ * The lead may be created by crear_lead or by agendar_reunion (whichever
+ * runs first); either way the team is notified once.
  */
 @Injectable()
 export class ChatLeadsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
+  /** Emails the team (fire-and-forget) only when the lead is new, not on updates. */
   async upsert(
     conversationId: string,
     locale: Locale,
     input: ChatLeadInput,
     options: UpsertOptions = {},
+  ): Promise<{ lead: Lead; created: boolean }> {
+    const result = await this.write(conversationId, locale, input, options);
+    if (result.created) void this.notifications.notifyNewLead(result.lead);
+    return result;
+  }
+
+  private write(
+    conversationId: string,
+    locale: Locale,
+    input: ChatLeadInput,
+    options: UpsertOptions,
   ): Promise<{ lead: Lead; created: boolean }> {
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.lead.findFirst({

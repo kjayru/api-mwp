@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   OnModuleInit,
@@ -7,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes } from 'node:crypto';
+import type { AuthenticatedUser } from '../../common/auth/authenticated-user.js';
 import type { Env } from '../../config/env.js';
 import type { Prisma, User } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -28,6 +30,8 @@ export const INVALID_REFRESH_TOKEN = 'Sesión inválida o expirada';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_USER_AGENT_LENGTH = 512;
+/** Refreshes followed from the session of an access token to the current one. */
+const MAX_ROTATION_HOPS = 20;
 
 type Db = PrismaService | Prisma.TransactionClient;
 
@@ -156,6 +160,82 @@ export class AuthService implements OnModuleInit {
     return toPublicUser(user);
   }
 
+  /**
+   * POST /auth/password. Revokes every other session of the user; the calling
+   * one (the `sid` of the access token, followed through its rotations) is
+   * kept when it is still active. Without it every session is revoked.
+   */
+  async changePassword(
+    caller: AuthenticatedUser,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const user = await this.users.findById(caller.id);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('No autenticado');
+    }
+    if (!(await this.passwords.verify(currentPassword, user.passwordHash))) {
+      throw new BadRequestException({
+        message: 'La contraseña actual no es correcta',
+        error: 'Bad Request',
+        details: { reason: 'invalid_password' },
+      });
+    }
+    if (newPassword === currentPassword) {
+      throw new BadRequestException({
+        message: 'La nueva contraseña debe ser distinta de la actual',
+        error: 'Bad Request',
+        details: { reason: 'same_password' },
+      });
+    }
+    const passwordHash = await this.passwords.hash(newPassword);
+    const keepId = caller.sessionId
+      ? await this.currentSession(user.id, caller.sessionId)
+      : undefined;
+    const revoked = await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
+      return this.users.revokeSessions(user.id, keepId, tx);
+    });
+    this.logger.log(
+      `User ${user.id} changed their password; revoked ${revoked} other session(s)`,
+    );
+  }
+
+  /**
+   * The active refresh token of the session that issued `sessionId`: an
+   * access token outlives one refresh, so follow the rotation chain.
+   */
+  private async currentSession(
+    userId: string,
+    sessionId: string,
+  ): Promise<string | undefined> {
+    let id: string | null = sessionId;
+    for (let hops = 0; id && hops < MAX_ROTATION_HOPS; hops++) {
+      const token: {
+        id: string;
+        userId: string;
+        revokedAt: Date | null;
+        expiresAt: Date;
+        replacedById: string | null;
+      } | null = await this.prisma.refreshToken.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          userId: true,
+          revokedAt: true,
+          expiresAt: true,
+          replacedById: true,
+        },
+      });
+      if (!token || token.userId !== userId) return undefined;
+      if (!token.revokedAt) {
+        return token.expiresAt.getTime() > Date.now() ? token.id : undefined;
+      }
+      id = token.replacedById;
+    }
+    return undefined;
+  }
+
   /** Creates a refresh token row and signs a new access token. */
   private async issueSession(
     db: Db,
@@ -179,6 +259,7 @@ export class AuthService implements OnModuleInit {
       sub: user.id,
       email: user.email,
       role: user.role,
+      sid: row.id,
     };
     const response: AuthResponse = {
       accessToken: await this.jwt.signAsync(payload),

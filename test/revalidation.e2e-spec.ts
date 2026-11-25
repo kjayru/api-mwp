@@ -272,4 +272,22 @@ describe('Front revalidation webhook (e2e)', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('answered 500'));
     warn.mockRestore();
   });
+
+  it('PUT /admin/settings sends the settings tag', async () => {
+    const hit = nextHit();
+    await http()
+      .put('/api/v1/admin/settings')
+      .set(bearer(accessToken(app, 'ADMIN')))
+      .send({
+        contactEmail: 'hola@miwebprofesional.com',
+        whatsapp: null,
+        socialLinks: { linkedin: null, github: null, instagram: null },
+        businessHours: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
+        timezone: 'America/Lima',
+        meetingDurationMinutes: 30,
+      })
+      .expect(200);
+
+    expect((await hit).body.tags).toEqual(['settings']);
+  });
 });

@@ -6,6 +6,8 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: UserRole;
+  /** Refresh token id of the session (`sid` claim), when the token has one. */
+  sessionId?: string;
 }
 
 export interface AuthenticatedRequest extends Request {

@@ -41,12 +41,14 @@ describe('AuthService', () => {
   };
   const prisma = {
     refreshToken,
+    user: { update: vi.fn() },
     $transaction: vi.fn(),
   };
   const users = {
     findByEmail: vi.fn(),
     findById: vi.fn(),
     recordLogin: vi.fn(),
+    revokeSessions: vi.fn(),
   };
   const passwords = {
     hash: vi.fn(),
@@ -119,6 +121,8 @@ describe('AuthService', () => {
         sub: user.id,
         email: user.email,
         role: 'ADMIN',
+        // The session (refresh token row) issued with the access token.
+        sid: 'rt-new-1',
       });
       expect(claims.exp - claims.iat).toBe(900);
 
@@ -352,6 +356,70 @@ describe('AuthService', () => {
 
       users.findById.mockResolvedValueOnce(makeUser({ isActive: false }));
       await expect(service.me('user-1')).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  describe('changePassword', () => {
+    const caller = { id: 'user-1', email: 'admin@miwebprofesional.com', role: 'ADMIN' as const };
+    const reasonOf = (error: unknown) =>
+      ((error as { getResponse(): { details: { reason: string } } }).getResponse()).details.reason;
+
+    beforeEach(() => {
+      users.findById.mockResolvedValue(makeUser());
+      passwords.hash.mockResolvedValue('scrypt$new');
+      users.revokeSessions.mockResolvedValue(1);
+    });
+
+    it('400 invalid_password for a wrong current password', async () => {
+      passwords.verify.mockResolvedValue(false);
+      const error = await service
+        .changePassword(caller, 'wrong', 'a-new-password-123')
+        .catch((e: unknown) => e);
+      expect(reasonOf(error)).toBe('invalid_password');
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('400 same_password when the new password equals the current one', async () => {
+      passwords.verify.mockResolvedValue(true);
+      const error = await service
+        .changePassword(caller, 'same-password-123', 'same-password-123')
+        .catch((e: unknown) => e);
+      expect(reasonOf(error)).toBe('same_password');
+    });
+
+    it('401 for an inactive user', async () => {
+      users.findById.mockResolvedValue(makeUser({ isActive: false }));
+      await expect(
+        service.changePassword(caller, 'x', 'a-new-password-123'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('keeps the calling session, following its rotations, and revokes the others', async () => {
+      passwords.verify.mockResolvedValue(true);
+      const future = new Date(Date.now() + DAY_MS);
+      refreshToken.findUnique
+        // The access token was issued with rt-1, which was rotated to rt-2.
+        .mockResolvedValueOnce({ id: 'rt-1', userId: 'user-1', revokedAt: new Date(), expiresAt: future, replacedById: 'rt-2' })
+        .mockResolvedValueOnce({ id: 'rt-2', userId: 'user-1', revokedAt: null, expiresAt: future, replacedById: null });
+
+      await service.changePassword({ ...caller, sessionId: 'rt-1' }, 'old-password', 'a-new-password-123');
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { passwordHash: 'scrypt$new' },
+      });
+      expect(users.revokeSessions).toHaveBeenCalledWith('user-1', 'rt-2', prisma);
+    });
+
+    it('revokes every session when the calling one cannot be identified', async () => {
+      passwords.verify.mockResolvedValue(true);
+      await service.changePassword(caller, 'old-password', 'a-new-password-123');
+      expect(users.revokeSessions).toHaveBeenCalledWith('user-1', undefined, prisma);
+
+      // A session of another user is never kept.
+      refreshToken.findUnique.mockResolvedValueOnce({ id: 'rt-9', userId: 'someone', revokedAt: null, expiresAt: new Date(Date.now() + DAY_MS), replacedById: null });
+      await service.changePassword({ ...caller, sessionId: 'rt-9' }, 'old-password', 'a-new-password-123');
+      expect(users.revokeSessions).toHaveBeenLastCalledWith('user-1', undefined, prisma);
     });
   });
 });

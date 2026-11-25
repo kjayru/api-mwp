@@ -6,6 +6,12 @@ export interface AccessTokenPayload {
   sub: string;
   email: string;
   role: UserRole;
+  /**
+   * Id of the refresh token (session) issued together with this access token.
+   * Lets POST /auth/password keep the calling session. Missing in tokens
+   * issued before Phase 5.
+   */
+  sid?: string;
 }
 
 /** Response of POST /auth/login and POST /auth/refresh. */

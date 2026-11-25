@@ -1,9 +1,15 @@
 import { Module } from '@nestjs/common';
+import { NotificationsModule } from '../notifications/notifications.module.js';
+import { AdminLeadsController } from './admin-leads.controller.js';
 import { ChatLeadsService } from './chat-leads.service.js';
+import { LeadsController } from './leads.controller.js';
+import { LeadsService } from './leads.service.js';
 
-/** Leads. Phase 4 only creates them from the chat; the admin CRUD arrives in Phase 5. */
+/** Leads: public contact form, chat leads (assistant) and the admin. */
 @Module({
-  providers: [ChatLeadsService],
-  exports: [ChatLeadsService],
+  imports: [NotificationsModule],
+  controllers: [LeadsController, AdminLeadsController],
+  providers: [LeadsService, ChatLeadsService],
+  exports: [ChatLeadsService, LeadsService],
 })
 export class LeadsModule {}

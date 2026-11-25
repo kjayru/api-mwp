@@ -9,7 +9,6 @@ import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
-import { PasswordService } from './password.service.js';
 
 export const LOGIN_THROTTLE = { ttl: 60_000, limit: 5 } as const;
 
@@ -39,11 +38,9 @@ export const LOGIN_THROTTLE = { ttl: 60_000, limit: 5 } as const;
   controllers: [AuthController],
   providers: [
     AuthService,
-    PasswordService,
     // Order matters: authenticate first, then check roles.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
-  exports: [PasswordService],
 })
 export class AuthModule {}

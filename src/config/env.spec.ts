@@ -1,4 +1,4 @@
-import { validateEnv } from './env.js';
+import { parseTrustProxy, validateEnv } from './env.js';
 
 const DATABASE_URL = 'postgresql://mwp:mwp@localhost:5433/mwp?schema=public';
 const JWT_SECRET = 'a'.repeat(32);
@@ -139,6 +139,65 @@ describe('validateEnv', () => {
         GOOGLE_REFRESH_TOKEN: 'refresh',
       });
       expect(env.GOOGLE_REFRESH_TOKEN).toBe('refresh');
+    });
+  });
+
+  describe('TRUST_PROXY', () => {
+    it('defaults to loopback', () => {
+      expect(validateEnv(required).TRUST_PROXY).toEqual(['loopback']);
+      expect(validateEnv({ ...required, TRUST_PROXY: '' }).TRUST_PROXY).toEqual(['loopback']);
+    });
+
+    it('accepts booleans, hop counts and lists of IPs, subnets and names', () => {
+      expect(parseTrustProxy('false')).toBe(false);
+      expect(parseTrustProxy('TRUE')).toBe(true);
+      expect(parseTrustProxy('2')).toBe(2);
+      expect(parseTrustProxy('loopback, 10.0.0.0/8, 192.168.1.10, ::1, fd00::/8')).toEqual([
+        'loopback',
+        '10.0.0.0/8',
+        '192.168.1.10',
+        '::1',
+        'fd00::/8',
+      ]);
+    });
+
+    it('rejects anything else at startup', () => {
+      expect(parseTrustProxy('apache')).toBeNull();
+      expect(parseTrustProxy('10.0.0.0/33')).toBeNull();
+      expect(parseTrustProxy('300.1.1.1')).toBeNull();
+      expect(() => validateEnv({ ...required, TRUST_PROXY: 'yes' })).toThrow(/TRUST_PROXY/);
+    });
+  });
+
+  describe('SMTP_* and ADMIN_URL', () => {
+    const smtp = {
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_PORT: '465',
+      SMTP_USER: 'user',
+      SMTP_PASS: 'pass',
+      SMTP_FROM: 'miwebprofesional <no-reply@example.com>',
+    };
+
+    it('requires the five SMTP variables together (or none)', () => {
+      expect(validateEnv(required).SMTP_HOST).toBeUndefined();
+      expect(() => validateEnv({ ...required, SMTP_HOST: 'smtp.example.com' })).toThrow(
+        /SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and SMTP_FROM/,
+      );
+      const env = validateEnv({ ...required, ...smtp, SMTP_SECURE: '' });
+      expect(env.SMTP_PORT).toBe(465);
+      expect(env.SMTP_SECURE).toBeUndefined();
+    });
+
+    it('validates SMTP_SECURE and the port', () => {
+      expect(() => validateEnv({ ...required, ...smtp, SMTP_SECURE: 'yes' })).toThrow(/SMTP_SECURE/);
+      expect(() => validateEnv({ ...required, ...smtp, SMTP_PORT: '70000' })).toThrow(/SMTP_PORT/);
+    });
+
+    it('ADMIN_URL defaults to the local admin and drops the trailing slash', () => {
+      expect(validateEnv(required).ADMIN_URL).toBe('http://localhost:3002');
+      expect(
+        validateEnv({ ...required, ADMIN_URL: 'https://admin.miwebprofesional.com/' }).ADMIN_URL,
+      ).toBe('https://admin.miwebprofesional.com');
     });
   });
 });

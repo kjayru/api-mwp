@@ -11,12 +11,13 @@ import {
 export const DEFAULT_OVERVIEW_DAYS = 30;
 const TOP_QUESTIONS = 5;
 const LATEST_LEADS = 5;
+const TOP_PAGES = 5;
 const DEFAULT_TIME_ZONE = 'America/Lima';
 
 export interface StatsOverview {
   range: { days: number; from: string; to: string; timeZone: string };
   totals: {
-    /** Sum of PageView counts (0 until the front records visits). */
+    /** Sum of the PageView counts of the period (POST /track). */
     visits: number;
     conversations: number;
     newLeads: number;
@@ -24,8 +25,15 @@ export interface StatsOverview {
     unanswered: number;
   };
   /** One entry per local day, oldest first (days without activity included). */
-  series: { date: string; conversations: number; leads: number }[];
+  series: {
+    date: string;
+    visits: number;
+    conversations: number;
+    leads: number;
+  }[];
   topQuestions: { question: string; count: number }[];
+  /** The paths with the most visits in the period (both locales). */
+  topPages: { path: string; visits: number }[];
   latestLeads: {
     id: string;
     name: string;
@@ -93,11 +101,26 @@ export class AdminStatsService {
         timeZone,
       ) ?? new Date(Date.UTC(fromYear, fromMonth - 1, fromDay));
 
-    const [visits, conversations, leads, unanswered, latestLeads] =
+    // PageView.date is the local day stored as UTC midnight (DATE column).
+    const visitsWhere = {
+      date: {
+        gte: new Date(`${dates[0]}T00:00:00.000Z`),
+        lte: new Date(`${dates[dates.length - 1]}T00:00:00.000Z`),
+      },
+    };
+    const [visitsByDay, visitsByPath, conversations, leads, unanswered, latestLeads] =
       await Promise.all([
-        this.prisma.pageView.aggregate({
-          where: { date: { gte: new Date(`${dates[0]}T00:00:00.000Z`) } },
+        this.prisma.pageView.groupBy({
+          by: ['date'],
+          where: visitsWhere,
           _sum: { count: true },
+        }),
+        this.prisma.pageView.groupBy({
+          by: ['path'],
+          where: visitsWhere,
+          _sum: { count: true },
+          orderBy: [{ _sum: { count: 'desc' } }, { path: 'asc' }],
+          take: TOP_PAGES,
         }),
         this.prisma.conversation.findMany({
           where: { createdAt: { gte: fromUtc } },
@@ -136,8 +159,18 @@ export class AdminStatsService {
 
     const localDay = (date: Date) => formatLocalDateTime(date, timeZone).slice(0, 10);
     const series = new Map(
-      dates.map((date) => [date, { date, conversations: 0, leads: 0 }]),
+      dates.map((date) => [
+        date,
+        { date, visits: 0, conversations: 0, leads: 0 },
+      ]),
     );
+    let visits = 0;
+    for (const row of visitsByDay) {
+      const count = row._sum.count ?? 0;
+      visits += count;
+      const entry = series.get(row.date.toISOString().slice(0, 10));
+      if (entry) entry.visits += count;
+    }
     for (const row of conversations) {
       const entry = series.get(localDay(row.createdAt));
       if (entry) entry.conversations++;
@@ -150,7 +183,7 @@ export class AdminStatsService {
     return {
       range: { days, from: dates[0], to: dates[dates.length - 1], timeZone },
       totals: {
-        visits: visits._sum.count ?? 0,
+        visits,
         conversations: conversations.length,
         newLeads: leads.length,
         unanswered,
@@ -161,6 +194,10 @@ export class AdminStatsService {
           .map((row) => row.messages[0]?.content)
           .filter((content): content is string => Boolean(content)),
       ),
+      topPages: visitsByPath.map((row) => ({
+        path: row.path,
+        visits: row._sum.count ?? 0,
+      })),
       latestLeads,
     };
   }

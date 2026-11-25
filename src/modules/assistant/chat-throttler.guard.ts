@@ -28,9 +28,9 @@ function throttled(req: Record<string, any>): HttpException {
 }
 
 /**
- * Limits by client IP. Behind Apache every request comes from 127.0.0.1
- * until `trust proxy` is configured (Phase 7), so the visitor limit below is
- * the effective one until then.
+ * Limits by client IP. `req.ip` is the visitor's IP behind Apache thanks to
+ * `trust proxy` (TRUST_PROXY, applied in setup-app.ts); with TRUST_PROXY=false
+ * behind a proxy every request would share the proxy's IP.
  */
 @Injectable()
 export class ChatIpThrottlerGuard extends ThrottlerGuard {

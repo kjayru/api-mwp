@@ -9,6 +9,7 @@ export const RevalidationTag = {
   case: (slug: string) => `case:${slug}`,
   blog: 'blog',
   post: (slug: string) => `post:${slug}`,
+  settings: 'settings',
 } as const;
 
 export interface RevalidationOptions {

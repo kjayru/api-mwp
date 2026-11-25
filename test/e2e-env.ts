@@ -31,4 +31,14 @@ export const e2eEnv = {
   GOOGLE_CLIENT_ID: '',
   GOOGLE_CLIENT_SECRET: '',
   GOOGLE_REFRESH_TOKEN: '',
+  // Supertest connects from 127.0.0.1, so X-Forwarded-For simulates visitor IPs.
+  TRUST_PROXY: 'loopback',
+  // Never real email: phase5.e2e-spec.ts injects a fake transport.
+  SMTP_HOST: '',
+  SMTP_PORT: '',
+  SMTP_USER: '',
+  SMTP_PASS: '',
+  SMTP_FROM: '',
+  SMTP_SECURE: '',
+  ADMIN_URL: 'http://localhost:3002',
 };

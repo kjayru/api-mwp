@@ -1,9 +1,10 @@
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
+import { AppValidationPipe } from './common/validation/app-validation.pipe.js';
 import type { Env } from './config/env.js';
 import { uploadsRoot } from './modules/uploads/storage/local-file-storage.js';
 
@@ -14,6 +15,9 @@ export const JSON_BODY_LIMIT = '1mb';
 export function setupApp(app: NestExpressApplication): void {
   const config = app.get<ConfigService<Env, true>>(ConfigService);
 
+  // req.ip is the visitor's IP (from X-Forwarded-For) only when the request
+  // comes from a trusted proxy; every per-IP rate limit relies on it.
+  app.set('trust proxy', config.get('TRUST_PROXY', { infer: true }));
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.enableCors({
@@ -25,7 +29,7 @@ export function setupApp(app: NestExpressApplication): void {
   // init, so Nest skips its default JSON parser.
   app.useBodyParser('json', { limit: JSON_BODY_LIMIT });
   app.useGlobalPipes(
-    new ValidationPipe({
+    new AppValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,

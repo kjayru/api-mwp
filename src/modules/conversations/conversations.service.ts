@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '../../generated/prisma/client.js';
+import type { Message, Prisma } from '../../generated/prisma/client.js';
 import type {
   LeadStatus,
   Locale,
@@ -94,6 +94,24 @@ export interface AssistantTurnRecord {
 }
 
 const json = (value: unknown) => value as Prisma.InputJsonValue;
+
+/** A stored message as the admin sees it (conversation and lead details). */
+export function toAdminMessage(m: Message): AdminMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    locale: m.locale,
+    caseSlug: m.caseSlug,
+    sources: m.sources,
+    toolCalls: m.toolCalls,
+    usage: m.usage,
+    model: m.model,
+    stopReason: m.stopReason,
+    unanswered: m.unanswered,
+    createdAt: m.createdAt,
+  };
+}
 
 /** Conversations, messages and their flags (chat persistence and admin reads). */
 @Injectable()
@@ -312,20 +330,7 @@ export class ConversationsService {
         meetLink: m.meetLink,
         googleEventId: m.googleEventId,
       })),
-      messages: row.messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        locale: m.locale,
-        caseSlug: m.caseSlug,
-        sources: m.sources,
-        toolCalls: m.toolCalls,
-        usage: m.usage,
-        model: m.model,
-        stopReason: m.stopReason,
-        unanswered: m.unanswered,
-        createdAt: m.createdAt,
-      })),
+      messages: row.messages.map(toAdminMessage),
     };
   }
 

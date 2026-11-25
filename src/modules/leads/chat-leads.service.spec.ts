@@ -1,4 +1,5 @@
 import type { PrismaService } from '../../prisma/prisma.service.js';
+import type { NotificationsService } from '../notifications/notifications.service.js';
 import { ChatLeadsService } from './chat-leads.service.js';
 
 describe('ChatLeadsService.upsert (idempotent per conversation)', () => {
@@ -9,7 +10,11 @@ describe('ChatLeadsService.upsert (idempotent per conversation)', () => {
   const prisma = {
     $transaction: vi.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
   };
-  const service = new ChatLeadsService(prisma as unknown as PrismaService);
+  const notifications = { notifyNewLead: vi.fn(async () => undefined) };
+  const service = new ChatLeadsService(
+    prisma as unknown as PrismaService,
+    notifications as unknown as NotificationsService,
+  );
   const input = {
     name: 'Ana',
     email: 'Ana@Example.COM',
@@ -46,6 +51,8 @@ describe('ChatLeadsService.upsert (idempotent per conversation)', () => {
       where: { id: 'conv-1' },
       data: { hasLead: true },
     });
+    // A new lead notifies the team.
+    expect(notifications.notifyNewLead).toHaveBeenCalledWith(lead);
   });
 
   it('updates the existing lead instead of creating a second one', async () => {
@@ -55,6 +62,8 @@ describe('ChatLeadsService.upsert (idempotent per conversation)', () => {
 
     expect(created).toBe(false);
     expect(tx.lead.create).not.toHaveBeenCalled();
+    // Updates never notify.
+    expect(notifications.notifyNewLead).not.toHaveBeenCalled();
     expect(tx.lead.update).toHaveBeenCalledWith({
       where: { id: 'lead-1' },
       // A missing phone keeps the stored one.

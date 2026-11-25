@@ -1,6 +1,6 @@
-# api-mwp: API contract (Phases 3, 3.6 and 4)
+# api-mwp: API contract (Phases 3 to 5)
 
-This is the contract for **front-mwp** (public site) and **admin-mwp** (admin panel): cases, technologies, services, stats, the blog (Phase 3.6), image uploads, the front revalidation webhook and the AI assistant (Phase 4). Auth (`/auth/*`) is documented in the README.
+This is the contract for **front-mwp** (public site) and **admin-mwp** (admin panel): cases, technologies, services, stats, the blog (Phase 3.6), image uploads, the front revalidation webhook, the AI assistant (Phase 4), and leads, the contact form, page views, site settings, users and the global search (Phase 5). Auth (`/auth/*`) is documented in the README.
 
 - Base URL: `http://localhost:3001/api/v1` in development and `https://api.miwebprofesional.com/api/v1` in QA. All paths below are relative to it, except `/uploads/...`, which lives at the server root.
 - JSON in and out (`Content-Type: application/json`), except the upload (multipart). JSON bodies may be up to **1 MB** (a blog post carries up to 100 000 characters of Markdown); larger bodies get **413**.
@@ -20,6 +20,7 @@ This is the contract for **front-mwp** (public site) and **admin-mwp** (admin pa
 8. [Endpoint summary](#8-endpoint-summary)
 9. [Blog](#9-blog): `GET /blog`, `GET /blog/:slug` and `/admin/blog`
 10. [Assistant](#10-assistant): `POST /assistant/chat` (SSE), knowledge base, FAQs, conversations, settings and dashboard
+11. [Leads, contact form, visits, settings, users and search](#11-leads-contact-form-visits-settings-users-and-search-phase-5) (Phase 5)
 
 ---
 
@@ -49,7 +50,7 @@ Every error, from any endpoint, has this shape:
 ```
 
 - `message` is a `string`, or a `string[]` for validation errors (one entry per problem). Messages are in Spanish and safe to show in the admin.
-- `details` appears on **422** (publication) errors and on the assistant's **429** (section 10). It is machine-readable, so the admin can highlight the fields:
+- `details` appears on **422** (publication) errors, on the **429** of the assistant and the contact form (`reason: "rate_limit"`), on the **400** of `POST /leads` and `PUT /admin/settings` (`fields`, sections 11.1 and 11.5) and on the user and password errors of section 11.6 (`reason`: `email_taken`, `self_change`, `last_admin`, `invalid_password`, `same_password`). It is machine-readable, so the admin can highlight the fields:
 
 ```json
 {
@@ -66,18 +67,18 @@ Every error, from any endpoint, has this shape:
 |---|---|
 | 400 | Invalid query or body: wrong types, unknown properties, bad slug format, invalid blocks, unknown `technologyIds`, invalid reorder `ids`, invalid upload |
 | 401 | Admin endpoint without a valid `Authorization: Bearer <accessToken>` |
-| 403 | Authenticated, but the role is not allowed (every endpoint here allows `ADMIN` and `EDITOR`) |
+| 403 | Authenticated, but the role is not allowed (sections 2 to 10 allow `ADMIN` and `EDITOR`; some endpoints of section 11 are `ADMIN` only) |
 | 404 | Unknown or soft-deleted id, or a slug that is not published in that locale |
-| 409 | Slug or technology name already in use |
+| 409 | Slug or technology name already in use; user email already in use (`email_taken`, 11.6) |
 | 413 | Upload larger than 5 MB, or a JSON body larger than 1 MB |
-| 422 | Publishing an incomplete translation, or editing a published translation so that it becomes incomplete |
-| 429 | Rate limits: login (README) and the assistant chat (section 10) |
+| 422 | Publishing an incomplete translation, or editing a published translation so that it becomes incomplete; user rules `self_change` and `last_admin` (11.6) |
+| 429 | Rate limits: login (README), the assistant chat (section 10) and the contact form (11.1) |
 | 503 | The assistant has no Claude API key (section 10) |
 
 ### Auth
 
 - **Public endpoints** (section 2 and `/uploads`): no auth.
-- **Admin endpoints** (`/admin/...`): `Authorization: Bearer <accessToken>` from `POST /auth/login` or `POST /auth/refresh`. The roles `ADMIN` and `EDITOR` are both allowed everywhere in this document.
+- **Admin endpoints** (`/admin/...`): `Authorization: Bearer <accessToken>` from `POST /auth/login` or `POST /auth/refresh`. The roles `ADMIN` and `EDITOR` are both allowed everywhere in sections 2 to 10. Section 11 marks the endpoints that are **ADMIN only** (deleting leads, saving the settings, users).
 
 ### Caching
 
@@ -632,6 +633,7 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | `stats` | `GET /stats` |
 | `blog` | `GET /blog` (every page) **and** every `GET /blog/:slug`, because the detail embeds `previous`/`next` and chips that depend on other posts and on technologies |
 | `post:<slug>` | `GET /blog/<slug>` (the same tag in both locales; ES and EN slugs may differ) |
+| `settings` | `GET /settings` (contact data, social links, business hours and time zone of the site; section 11.5) |
 
 ### Tags sent per mutation
 
@@ -646,6 +648,7 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | `POST /admin/services` | none (draft) |
 | `PATCH /admin/blog/:id` (any field: text, slug, cover, technologies), publish, unpublish, `DELETE` | `blog` and `post:<slug>` for **every** slug of the post (both locales, any status). On a slug change, both the old and the new slug are sent |
 | `POST /admin/blog` | none (a new post is a draft) |
+| `PUT /admin/settings` | `settings` |
 
 ### Environment
 
@@ -657,6 +660,8 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 ---
 
 ## 8. Endpoint summary
+
+Phase 5 endpoints (leads, contact form, page views, settings, users and search) are listed in [section 11.9](#119-summary).
 
 | Method | Path | Auth | Success |
 |---|---|---|---|
@@ -1387,7 +1392,7 @@ Knowledge base FAQs ("Base de conocimiento", "Crear FAQ" from an unanswered ques
 ```
 
 - Days are calendar days in the site time zone (`SiteSettings.timezone`), from `today - days + 1` to today; `series` has **one entry per day** (zeros included), oldest first (the example omits the middle days).
-- `visits`: sum of `PageView` counts in the period (0 until the front records visits). `conversations`: started in the period. `newLeads`: non-deleted leads created in the period (any source). `unanswered`: visitor questions marked "sin respuesta".
+- `visits`: sum of `PageView` counts in the period (`POST /track`, section 11.3; per-day values and `topPages` in 11.8). `conversations`: started in the period. `newLeads`: non-deleted leads created in the period (any source). `unanswered`: visitor questions marked "sin respuesta".
 - `topQuestions`: up to 5 first questions of the period's conversations, grouped ignoring case, accents and punctuation. `latestLeads`: the 5 newest leads (any date).
 
 ### 10.12 Errors and limits summary
@@ -1412,3 +1417,252 @@ Knowledge base FAQs ("Base de conocimiento", "Crear FAQ" from an unanswered ques
 | 422 | Publishing (or emptying a published) FAQ translation that is incomplete |
 | 429 | Chat rate limit or session limit (`details.reason`) |
 | 503 | No `ANTHROPIC_API_KEY` (chat and test) |
+
+---
+
+## 11. Leads, contact form, visits, settings, users and search (Phase 5)
+
+### 11.0 Client IP behind the proxy
+
+The API runs `app.set('trust proxy', TRUST_PROXY)`, where the env var defaults to `loopback`. Behind Apache, `req.ip` is then the visitor's real IP, taken from `X-Forwarded-For` only when the request comes from 127.0.0.1 or ::1. Every per-IP limit (login, chat, contact form, visits) uses it. Set `TRUST_PROXY=false` when the API is exposed without a proxy. Accepted values: `false`, `true` (trust any proxy; never in production), a number of hops, or a comma-separated list of IPs, CIDR subnets and the names `loopback`, `linklocal`, `uniquelocal`. Anything else stops the API at startup.
+
+### 11.1 `POST /leads` (public): contact form
+
+```json
+{
+  "name": "Ana Torres",
+  "email": "ana@example.com",
+  "phone": "+51 987 654 321",
+  "company": "Clínica Sur",
+  "interest": "SAAS",
+  "message": "Queremos una plataforma de citas para tres sedes…",
+  "locale": "es",
+  "consent": true,
+  "website": ""
+}
+```
+
+| Field | Rules |
+|---|---|
+| `name` | 2–120 characters, trimmed |
+| `email` | Valid email, ≤ 254, stored lowercase |
+| `phone` | Optional, ≤ 40, digits, spaces and `+()-` only. Blank counts as not sent |
+| `company` | Optional, ≤ 120. Blank counts as not sent |
+| `interest` | Optional: `SAAS` \| `ECOMMERCE` \| `WEB_CMS` \| `AI` \| `OTHER` |
+| `message` | 10–3000 characters |
+| `locale` | `es` \| `en` |
+| `consent` | Must be `true` (acceptance of the privacy policy); otherwise **400** |
+| `website` | Honeypot, hidden from people. Any value is accepted (never a 400). When it is not blank, the API answers **201** with the same shape (a fake id) but stores and sends nothing |
+
+**201** `{ "id": "cm…", "createdAt": "…" }`. The lead is stored with `source: FORM` and `status: NEW`. `interest` is stored as its Spanish label (`Plataforma SaaS`, `Ecommerce`, `Web / CMS`, `IA aplicada`, `Otro`), and `company` is prepended to `message` as `Empresa: <company>\n\n`.
+
+- **400** (validation): the usual error format, with `message` as the Spanish `string[]`, plus `details.fields`: the names of the body properties that failed (unknown properties included), so the front can mark its fields:
+
+  ```json
+  {
+    "statusCode": 400,
+    "error": "Bad Request",
+    "message": ["email debe ser un email válido", "consent debe ser true (aceptación de la política de privacidad)"],
+    "details": { "fields": ["email", "consent"] },
+    "path": "/api/v1/leads",
+    "timestamp": "…"
+  }
+  ```
+
+- **Limit:** 5 per hour per IP (**429** in the usual error format, `details: { "reason": "rate_limit" }`, message in the `locale` of the body). Every request counts, including the ones answered 400.
+- **Notification:** see 11.2. It is fire-and-forget, so the answer never waits for the email.
+- CORS: called from the browser of the public site (same origins as the chat).
+
+### 11.2 Email notification to the team
+
+On every **new** lead (form, or the assistant when `crear_lead` or `agendar_reunion` creates the lead of the conversation; updates never notify), the API emails `SiteSettings.contactEmail`. The email has the name, email, phone, source, interest, locale, message or summary, and a link to `ADMIN_URL/leads/<id>`. Its `Reply-To` is the visitor's email.
+
+- SMTP via `nodemailer`, active only when `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` are set (all or none, validated at startup like the `GOOGLE_*` trio). `SMTP_SECURE` defaults to `true` when the port is 465. `ADMIN_URL` defaults to `http://localhost:3002`.
+- Without SMTP, the API only logs `Lead notification skipped (SMTP not configured)`. Without a `contactEmail` it logs a warning and sends nothing.
+- A sending failure is logged and never fails the request. There is a 10 s timeout and no retries.
+- The email is plain text plus simple HTML, in Spanish. User values are HTML-escaped.
+
+### 11.3 `POST /track` (public): page views
+
+```json
+{ "path": "/es/casos/cortemaestro", "locale": "es" }
+```
+
+**204** always, also when the view is ignored, so tracking never surfaces errors. The view is ignored when:
+
+- the path does not start with `/es` or `/en`, is longer than 200 characters, or contains `/api/`;
+- `locale` is not `es` or `en`, or does not match the prefix of the path (`/en/...` with `"es"`);
+- the body is not a JSON object (it is not validated like the other endpoints: no 400 for unknown or missing properties);
+- the `User-Agent` looks like a bot (`bot|crawl|spider|slurp|preview|headless|lighthouse|monitor|curl|wget|python|axios|node-fetch|go-http`, case-insensitive) or is empty.
+
+The query and hash are removed, trailing `/` is dropped (except for `/es` and `/en`), and the path is lowercased. The day is the calendar day in `SiteSettings.timezone`. The count is an upsert `+1` on `(date, path, locale)`. **Limit:** 60 per minute per IP. Excess views get **204** but are not counted. No IP, cookie or identifier is stored.
+
+### 11.4 Admin: leads (ADMIN, EDITOR)
+
+`GET /admin/leads?page&limit&status&source&q&sort&order`
+
+| Query | Default | Values |
+|---|---|---|
+| `page`, `limit` | 1, 20 | Like every admin list (limit ≤ 100) |
+| `status` | | `NEW` \| `CONTACTED` \| `PROPOSAL` \| `WON` \| `LOST` |
+| `source` | | `CHAT_IA` \| `FORM` |
+| `q` | | Case-insensitive search in name, email, phone, interest and message (≤ 200) |
+| `sort` | `createdAt` | `createdAt` \| `updatedAt` \| `name` |
+| `order` | `desc` | `asc` \| `desc` |
+
+**200**
+
+```json
+{
+  "data": [
+    {
+      "id": "cm…", "name": "Ana Torres", "email": "ana@example.com", "phone": null,
+      "source": "FORM", "status": "NEW", "interest": "Plataforma SaaS", "locale": "ES",
+      "conversationId": null, "hasMeeting": false, "nextMeetingAt": null,
+      "createdAt": "…", "updatedAt": "…"
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 7, "countsByStatus": { "NEW": 3, "CONTACTED": 2, "PROPOSAL": 1, "WON": 1, "LOST": 0 } }
+}
+```
+
+`countsByStatus` counts **all** non-deleted leads that match `source` and `q`, ignoring `status`, so the UI can show it on its status tabs. `hasMeeting` is true when the lead has at least one meeting that is not `CANCELLED`. `nextMeetingAt` is the start of the next meeting that is `BOOKED` or `REQUESTED` and in the future, or `null`. `status` and `source` are case-insensitive in the query.
+
+`GET /admin/leads/:id` returns **200**: the list item plus `message`, `notes`, and:
+
+```json
+{
+  "meetings": [{ "id": "cm…", "status": "BOOKED", "start": "…", "end": "…", "meetLink": "https://meet.google.com/…", "createdAt": "…" }],
+  "conversation": {
+    "id": "cm…", "locale": "ES", "caseSlug": null, "createdAt": "…",
+    "messages": [{ "id": "cm…", "role": "USER", "content": "…", "createdAt": "…" }]
+  }
+}
+```
+
+`conversation` is `null` for form leads. Its messages have the same shape as `GET /admin/conversations/:id`. Meetings are newest first. **404** for unknown or deleted leads.
+
+`PATCH /admin/leads/:id` with `{ "status"?: LeadStatus, "notes"?: string | null }`. `notes` holds up to 5000 characters, and `""` or `null` clears it. Returns **200** with the detail. Any status can change to any other.
+
+`DELETE /admin/leads/:id`: **ADMIN only**, soft delete, **204**. Deleted leads leave the lists, the counts, the search and the dashboard. When the conversation of a deleted chat lead has no other lead, its `hasLead` becomes `false` (the `lead` filter of 10.9).
+
+### 11.5 Site settings
+
+`GET /settings` (public, `Cache-Control: public, max-age=60`) returns **200**:
+
+```json
+{
+  "contactEmail": "hola@miwebprofesional.com",
+  "whatsapp": "51987654321",
+  "socialLinks": { "linkedin": "https://…", "github": null, "instagram": null },
+  "businessHours": { "mon": [{ "start": "08:00", "end": "19:00" }], "sun": [] },
+  "timezone": "America/Lima"
+}
+```
+
+`businessHours` has the same shape as in the admin (the seven keys `mon` to `sun`, in that order; `[]` = closed) and `timezone` is the zone those hours are in, so /contacto can show the real hours. Front fetch tag: `settings`.
+
+`GET /admin/settings` (ADMIN, EDITOR) returns the full row:
+
+```json
+{
+  "contactEmail": "hola@miwebprofesional.com",
+  "whatsapp": "51987654321",
+  "socialLinks": { "linkedin": "https://…", "github": null, "instagram": null },
+  "businessHours": { "mon": [{ "start": "08:00", "end": "19:00" }], "sun": [] },
+  "timezone": "America/Lima",
+  "meetingDurationMinutes": 30,
+  "updatedAt": "…"
+}
+```
+
+`businessHours` always has the seven keys `mon` to `sun`, and `socialLinks` the three keys. `updatedAt` is `null` only while the row has never been saved (the seed creates it, so in practice never); the values are then the defaults (empty `contactEmail`, Monday to Saturday 08:00–19:00, `America/Lima`, 30 minutes).
+
+`PUT /admin/settings` (**ADMIN only**) takes the same body without `updatedAt` and returns **200** with the saved row. Validation:
+
+- `contactEmail` must be a valid email (stored lowercase).
+- `whatsapp` is required: `null` or 8–15 digits. The API strips spaces, `+` and dashes before checking, and stores the digits; `""` counts as `null`.
+- `socialLinks` has exactly the three keys, each `null` or an `https://` URL of up to 300 characters.
+- `businessHours` needs all seven days. Each day has at most 3 intervals in `HH:mm` (00:00–23:59), with `start < end`, no overlaps, sorted.
+- `timezone` is a valid IANA zone (checked with `Intl.DateTimeFormat`), stored in its canonical spelling (`america/lima` becomes `America/Lima`).
+- `meetingDurationMinutes` is 15–120, a multiple of 15.
+
+Errors are **400** with the usual Spanish messages; nested ones are prefixed with their path (`"businessHours.mon: los intervalos deben estar ordenados y no superponerse"`, `"socialLinks.github debe ser null o una URL https"`). Unknown keys (including `updatedAt`) are rejected. Like `POST /leads`, the body also has `details.fields`, with paths of at most two levels, so the form can mark them (an error in `businessHours.mon[0].start` is reported as `businessHours.mon`):
+
+```json
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": ["socialLinks.github debe ser null o una URL https", "businessHours.mon: el inicio (10:00) debe ser anterior al fin (09:00)"],
+  "details": { "fields": ["socialLinks.github", "businessHours.mon"] },
+  "path": "/api/v1/admin/settings",
+  "timestamp": "…"
+}
+```
+
+After saving, the API sends the front revalidation tag `settings`. The calendar, the dashboard and `POST /track` read the settings on every request, so changes apply at once.
+
+### 11.6 Users (ADMIN only)
+
+User shape (never includes `passwordHash`):
+
+```json
+{ "id": "cm…", "email": "ana@miwebprofesional.com", "name": "Ana", "role": "EDITOR", "isActive": true, "lastLoginAt": null, "createdAt": "…", "updatedAt": "…" }
+```
+
+| Endpoint | Body | Success | Rules |
+|---|---|---|---|
+| `GET /admin/users` | | 200 `{ data }`, ordered by name | |
+| `POST /admin/users` | `{ email, name, role, password }` | 201 user | Email stored lowercase; **409** `email_taken`; name 2–120 characters; password 12–128 characters |
+| `PATCH /admin/users/:id` | `{ name?, role?, isActive? }` | 200 user | **422** `self_change` when an admin changes their own `role` or `isActive`; **422** `last_admin` when the change would leave no active ADMIN |
+| `POST /admin/users/:id/password` | `{ password }` | 204 | 12–128 characters; revokes that user's refresh tokens |
+
+The codes `email_taken` (409), `self_change` and `last_admin` (422), and `invalid_password` / `same_password` (400 of `POST /auth/password`) go in `details.reason` of the usual error format, like the assistant's 429, with a Spanish `message` that can be shown as is ("Ya existe un usuario con ese email", "No puedes cambiar tu propio rol ni desactivar tu propia cuenta", "Debe quedar al menos un administrador activo", "La contraseña actual no es correcta", "La nueva contraseña debe ser distinta de la actual"). Example: `{ "statusCode": 422, "error": "Unprocessable Entity", "message": "Debe quedar al menos un administrador activo", "details": { "reason": "last_admin" }, … }`. Sending your own current `role` or `isActive` unchanged is not a `self_change`.
+
+Deactivating a user (`isActive: false`) revokes all their refresh tokens, and a deactivated user cannot log in or refresh. An access token already issued stays valid until it expires (`JWT_ACCESS_TTL_SECONDS`, 15 min), as before. Users are never deleted. **404** for unknown ids. `role` is `ADMIN` \| `EDITOR`.
+
+`POST /auth/password` (any logged-in user) takes `{ currentPassword, newPassword }` (new password 12–128 characters, different from the current one). It returns **204**. A wrong `currentPassword` gives **400** `invalid_password`, and a new password equal to the current one **400** `same_password` (both in `details.reason`). A shorter or longer new password is a plain validation **400**. The call revokes all the user's refresh tokens except the one of the calling session, when the session can be identified. Otherwise it revokes them all, and the admin then renews or asks the user to log in again.
+
+How the session is identified: since Phase 5 every access token carries a `sid` claim, the id of the refresh token issued with it (login or refresh). The API keeps that refresh token, or, when it was already rotated by a later `POST /auth/refresh`, its current replacement, as long as it is active. Access tokens issued before Phase 5 have no `sid`, so every session is revoked; the admin keeps working until its access token expires and then has to log in again. Note that refreshing with a revoked token is treated as theft and revokes every session (README), so the other tabs or devices simply get 401.
+
+### 11.7 Global search (ADMIN, EDITOR)
+
+`GET /admin/search?q=` (`q` is 2–100 characters after trimming, otherwise **400**) returns **200**:
+
+```json
+{
+  "cases": [{ "id": "cm…", "title": "ContaFlow IA", "type": "SAAS" }],
+  "blogPosts": [{ "id": "cm…", "title": "…" }],
+  "leads": [{ "id": "cm…", "name": "Ana Torres", "email": "ana@example.com", "status": "NEW" }],
+  "conversations": [{ "id": "cm…", "firstQuestion": "…", "lastMessageAt": "…" }]
+}
+```
+
+- At most 5 results per group, newest first (cases, posts and leads by creation date; conversations by last message). The search is case-insensitive and never returns deleted rows.
+- **Cases and posts:** title in both locales (the ES title, falling back to EN).
+- **Leads:** like `q` in 11.4.
+- **Conversations:** text of the messages (visitor and assistant). `firstQuestion` is the first visitor message, truncated to 300 characters, or `null`.
+
+### 11.8 Dashboard additions
+
+`GET /admin/stats/overview` adds `visits` to every `series` entry (`{ date, visits, conversations, leads }`). It also adds `topPages: [{ path, visits }]`, the 5 paths with the most visits in the period (paths carry the locale prefix; ties are ordered by path). `totals.visits` now counts real views. A day's visits are those of its calendar day in `SiteSettings.timezone`, like the other series.
+
+### 11.9 Summary
+
+| Method | Path | Auth | Success |
+|---|---|---|---|
+| POST | `/leads` | public (5/h per IP) | 201 |
+| POST | `/track` | public (60/min per IP) | 204 |
+| GET | `/settings` | public | 200 |
+| GET | `/admin/leads` | ADMIN, EDITOR | 200 `{ data, meta }` |
+| GET | `/admin/leads/:id` | ADMIN, EDITOR | 200 |
+| PATCH | `/admin/leads/:id` | ADMIN, EDITOR | 200 |
+| DELETE | `/admin/leads/:id` | ADMIN | 204 |
+| GET | `/admin/settings` | ADMIN, EDITOR | 200 |
+| PUT | `/admin/settings` | ADMIN | 200 |
+| GET | `/admin/users` | ADMIN | 200 `{ data }` |
+| POST | `/admin/users` | ADMIN | 201 |
+| PATCH | `/admin/users/:id` | ADMIN | 200 |
+| POST | `/admin/users/:id/password` | ADMIN | 204 |
+| POST | `/auth/password` | any logged-in user | 204 |
+| GET | `/admin/search?q` | ADMIN, EDITOR | 200 |

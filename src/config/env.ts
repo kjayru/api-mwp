@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 const MIN_REVALIDATE_SECRET_LENGTH = 32;
@@ -9,12 +10,69 @@ function emptyToUndefined(value: unknown): unknown {
   return value === '' ? undefined : value;
 }
 
+/** Value of Express's `trust proxy` setting (see parseTrustProxy). */
+export type TrustProxy = boolean | number | string[];
+
+/** Names understood by Express (proxy-addr) in a `trust proxy` list. */
+const TRUST_PROXY_NAMES = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+function isTrustProxyEntry(entry: string): boolean {
+  if (TRUST_PROXY_NAMES.has(entry)) return true;
+  const [address, prefix, ...rest] = entry.split('/');
+  const family = isIP(address);
+  if (family === 0 || rest.length > 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (family === 4 ? 32 : 128);
+}
+
+/**
+ * TRUST_PROXY -> Express `trust proxy`: "false" | "true" | a number of hops |
+ * a comma-separated list of IPs, CIDR subnets and the names loopback,
+ * linklocal and uniquelocal. Returns null when the value is invalid.
+ */
+export function parseTrustProxy(value: string): TrustProxy | null {
+  const text = value.trim().toLowerCase();
+  if (text === 'false') return false;
+  if (text === 'true') return true;
+  if (/^\d+$/.test(text)) return Number(text);
+  const entries = text
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (entries.length === 0 || !entries.every(isTrustProxyEntry)) return null;
+  return entries;
+}
+
+const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
+
 const envSchema = z
   .object({
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
       .default('development'),
     PORT: z.coerce.number().int().positive().default(3001),
+    // Express `trust proxy`: which proxies may set X-Forwarded-For, so req.ip
+    // (every per-IP limit) is the visitor's IP. Default: only a proxy on the
+    // same machine (Apache). Use "false" when the API is exposed directly.
+    TRUST_PROXY: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        .default('loopback')
+        .transform((value, ctx) => {
+          const parsed = parseTrustProxy(value);
+          if (parsed === null) {
+            ctx.addIssue({
+              code: 'custom',
+              message:
+                'TRUST_PROXY must be "false", "true", a number of hops or a comma-separated list of IPs, subnets, loopback, linklocal or uniquelocal',
+            });
+            return z.NEVER;
+          }
+          return parsed;
+        }),
+    ),
     DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
     // Comma-separated list of origins allowed by CORS (front-mwp and admin-mwp).
     CORS_ORIGINS: z
@@ -73,6 +131,31 @@ const envSchema = z
     GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().optional()),
     GOOGLE_CLIENT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
     GOOGLE_REFRESH_TOKEN: z.preprocess(emptyToUndefined, z.string().optional()),
+    // --- Lead notifications (Phase 5) ---
+    // SMTP account that emails SiteSettings.contactEmail on every new lead.
+    // All five or none: without them the notification is only logged.
+    SMTP_HOST: optionalString,
+    SMTP_PORT: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1).max(65535).optional(),
+    ),
+    SMTP_USER: optionalString,
+    SMTP_PASS: optionalString,
+    // Sender, e.g. "miwebprofesional <no-reply@miwebprofesional.com>".
+    SMTP_FROM: optionalString,
+    // Implicit TLS. Defaults to true on port 465 (STARTTLS is used otherwise).
+    SMTP_SECURE: z.preprocess(
+      emptyToUndefined,
+      z.enum(['true', 'false']).optional(),
+    ),
+    // Base URL of admin-mwp, for the link in the notification email.
+    ADMIN_URL: z.preprocess(
+      emptyToUndefined,
+      z
+        .url({ protocol: /^https?$/ })
+        .default('http://localhost:3002')
+        .transform((value) => value.replace(/\/+$/, '')),
+    ),
   })
   .superRefine((env, ctx) => {
     if (
@@ -96,6 +179,21 @@ const envSchema = z
         path: ['GOOGLE_REFRESH_TOKEN'],
         message:
           'Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN together (or none of them)',
+      });
+    }
+    const smtp = [
+      env.SMTP_HOST,
+      env.SMTP_PORT,
+      env.SMTP_USER,
+      env.SMTP_PASS,
+      env.SMTP_FROM,
+    ].filter((value) => value !== undefined).length;
+    if (smtp !== 0 && smtp !== 5) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMTP_HOST'],
+        message:
+          'Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and SMTP_FROM together (or none of them)',
       });
     }
   });
