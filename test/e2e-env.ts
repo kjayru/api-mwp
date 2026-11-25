@@ -21,4 +21,14 @@ export const e2eEnv = {
   // Webhook off by default; revalidation.e2e-spec.ts points it at a local server.
   FRONT_REVALIDATE_URL: '',
   REVALIDATE_SECRET: '',
+  // The assistant never calls real APIs in e2e: assistant.e2e-spec.ts injects
+  // fake Claude and Voyage providers through Nest DI.
+  ANTHROPIC_API_KEY: '',
+  VOYAGE_API_KEY: '',
+  VOYAGE_MODEL: 'fake-embeddings',
+  // Suited to the bag-of-words fake embeddings (test/utils/fake-embeddings.ts).
+  KNOWLEDGE_MIN_SIMILARITY: '0.15',
+  GOOGLE_CLIENT_ID: '',
+  GOOGLE_CLIENT_SECRET: '',
+  GOOGLE_REFRESH_TOKEN: '',
 };

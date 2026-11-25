@@ -17,6 +17,7 @@ import { slugify, uniqueSlug } from '../../common/slug.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { Locale } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { KnowledgeSyncService } from '../knowledge/knowledge-sync.service.js';
 import { assertTechnologiesExist } from '../technologies/technology-ids.js';
 import {
   altFor,
@@ -202,6 +203,7 @@ export class AdminCasesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly revalidation: RevalidationService,
+    private readonly knowledge: KnowledgeSyncService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -369,6 +371,9 @@ export class AdminCasesService {
       .catch(rethrowUniqueAsConflict);
 
     this.notifyCaseChanged(slugs);
+    // Any edit may change what the assistant knows (text, client, technologies,
+    // includeInKnowledgeBase); unchanged chunks keep their embeddings.
+    this.knowledge.scheduleCase(id);
     return this.findOne(id);
   }
 
@@ -476,9 +481,8 @@ export class AdminCasesService {
       }),
       this.touch(id),
     ]);
-    // TODO(Phase 4, ai-assistant): emit the "case published" event that triggers
-    // the knowledge base indexing.
     this.notifyCaseChanged(current.translations.map((t) => t.slug));
+    this.knowledge.scheduleCase(id);
     return this.findOne(id);
   }
 
@@ -496,6 +500,7 @@ export class AdminCasesService {
       this.touch(id),
     ]);
     this.notifyCaseChanged(current.translations.map((t) => t.slug));
+    this.knowledge.scheduleCase(id);
     return this.findOne(id);
   }
 
@@ -506,6 +511,8 @@ export class AdminCasesService {
       data: { deletedAt: new Date() },
     });
     this.notifyCaseChanged(current.translations.map((t) => t.slug));
+    // Removes its chunks (a deleted case is no longer eligible).
+    this.knowledge.scheduleCase(id);
   }
 
   async reorder(ids: string[]): Promise<void> {

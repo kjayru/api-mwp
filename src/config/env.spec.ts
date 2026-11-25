@@ -108,4 +108,37 @@ describe('validateEnv', () => {
       validateEnv({ DATABASE_URL, JWT_SECRET: 'too-short' }),
     ).toThrow(/JWT_SECRET/);
   });
+
+  describe('assistant (Phase 4)', () => {
+    it('defaults the Voyage model and the similarity threshold; keys are optional', () => {
+      const env = validateEnv({ ...required, ANTHROPIC_API_KEY: '', VOYAGE_API_KEY: '' });
+      expect(env.VOYAGE_MODEL).toBe('voyage-3.5');
+      expect(env.KNOWLEDGE_MIN_SIMILARITY).toBe(0.5);
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.VOYAGE_API_KEY).toBeUndefined();
+    });
+
+    it('coerces KNOWLEDGE_MIN_SIMILARITY and rejects values outside 0-1', () => {
+      expect(
+        validateEnv({ ...required, KNOWLEDGE_MIN_SIMILARITY: '0.6' })
+          .KNOWLEDGE_MIN_SIMILARITY,
+      ).toBe(0.6);
+      expect(() =>
+        validateEnv({ ...required, KNOWLEDGE_MIN_SIMILARITY: '1.5' }),
+      ).toThrow(/KNOWLEDGE_MIN_SIMILARITY/);
+    });
+
+    it('requires the three GOOGLE_* variables together', () => {
+      expect(() =>
+        validateEnv({ ...required, GOOGLE_CLIENT_ID: 'id' }),
+      ).toThrow(/GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN/);
+      const env = validateEnv({
+        ...required,
+        GOOGLE_CLIENT_ID: 'id',
+        GOOGLE_CLIENT_SECRET: 'secret',
+        GOOGLE_REFRESH_TOKEN: 'refresh',
+      });
+      expect(env.GOOGLE_REFRESH_TOKEN).toBe('refresh');
+    });
+  });
 });

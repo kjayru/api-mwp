@@ -1,6 +1,6 @@
-# api-mwp: content API contract (Phases 3 and 3.6)
+# api-mwp: API contract (Phases 3, 3.6 and 4)
 
-This is the contract for **front-mwp** (public site) and **admin-mwp** (admin panel): cases, technologies, services, stats, the blog (Phase 3.6), image uploads and the front revalidation webhook. Auth (`/auth/*`) is documented in the README.
+This is the contract for **front-mwp** (public site) and **admin-mwp** (admin panel): cases, technologies, services, stats, the blog (Phase 3.6), image uploads, the front revalidation webhook and the AI assistant (Phase 4). Auth (`/auth/*`) is documented in the README.
 
 - Base URL: `http://localhost:3001/api/v1` in development and `https://api.miwebprofesional.com/api/v1` in QA. All paths below are relative to it, except `/uploads/...`, which lives at the server root.
 - JSON in and out (`Content-Type: application/json`), except the upload (multipart). JSON bodies may be up to **1 MB** (a blog post carries up to 100 000 characters of Markdown); larger bodies get **413**.
@@ -19,6 +19,7 @@ This is the contract for **front-mwp** (public site) and **admin-mwp** (admin pa
 7. [Front revalidation webhook](#7-front-revalidation-webhook)
 8. [Endpoint summary](#8-endpoint-summary)
 9. [Blog](#9-blog): `GET /blog`, `GET /blog/:slug` and `/admin/blog`
+10. [Assistant](#10-assistant): `POST /assistant/chat` (SSE), knowledge base, FAQs, conversations, settings and dashboard
 
 ---
 
@@ -48,7 +49,7 @@ Every error, from any endpoint, has this shape:
 ```
 
 - `message` is a `string`, or a `string[]` for validation errors (one entry per problem). Messages are in Spanish and safe to show in the admin.
-- `details` appears only on **422** (publication) errors. It is machine-readable, so the admin can highlight the fields:
+- `details` appears on **422** (publication) errors and on the assistant's **429** (section 10). It is machine-readable, so the admin can highlight the fields:
 
 ```json
 {
@@ -70,6 +71,8 @@ Every error, from any endpoint, has this shape:
 | 409 | Slug or technology name already in use |
 | 413 | Upload larger than 5 MB, or a JSON body larger than 1 MB |
 | 422 | Publishing an incomplete translation, or editing a published translation so that it becomes incomplete |
+| 429 | Rate limits: login (README) and the assistant chat (section 10) |
+| 503 | The assistant has no Claude API key (section 10) |
 
 ### Auth
 
@@ -698,6 +701,23 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 | POST | `/admin/blog/:id/unpublish` | ADMIN, EDITOR | 200 |
 | DELETE | `/admin/blog/:id` | ADMIN, EDITOR | 204 |
 | GET | `/uploads/<path>` (no `/api` prefix) | public | 200 file |
+| POST | `/assistant/chat` | public (10/min per IP and visitor) | 200 SSE |
+| GET | `/admin/conversations` | ADMIN, EDITOR | 200 `{ data, meta }` |
+| GET | `/admin/conversations/:id` | ADMIN, EDITOR | 200 |
+| GET | `/admin/assistant/settings` | ADMIN, EDITOR | 200 |
+| PUT | `/admin/assistant/settings` | ADMIN, EDITOR | 200 |
+| POST | `/admin/assistant/test` | ADMIN, EDITOR | 200 |
+| GET | `/admin/assistant/unanswered?days` | ADMIN, EDITOR | 200 |
+| GET | `/admin/knowledge/status` | ADMIN, EDITOR | 200 |
+| POST | `/admin/knowledge/reindex` | ADMIN, EDITOR | 202 |
+| GET | `/admin/faqs` | ADMIN, EDITOR | 200 `{ data, meta }` |
+| GET | `/admin/faqs/:id` | ADMIN, EDITOR | 200 |
+| POST | `/admin/faqs` | ADMIN, EDITOR | 201 |
+| PATCH | `/admin/faqs/:id` | ADMIN, EDITOR | 200 |
+| POST | `/admin/faqs/:id/publish` | ADMIN, EDITOR | 200 |
+| POST | `/admin/faqs/:id/unpublish` | ADMIN, EDITOR | 200 |
+| DELETE | `/admin/faqs/:id` | ADMIN, EDITOR | 204 |
+| GET | `/admin/stats/overview?days` | ADMIN, EDITOR | 200 |
 
 ---
 
@@ -924,3 +944,471 @@ Soft delete. **204** with no body. **404** for an unknown or already deleted id.
 ### Revalidation
 
 Every blog mutation except `POST /admin/blog` sends `blog` plus `post:<slug>` for every slug of the post (old and new on a slug change); see [section 7](#7-front-revalidation-webhook). The front should tag `GET /blog` with `blog`, and `GET /blog/:slug` with both `blog` and `post:<slug>`.
+
+---
+
+## 10. Assistant
+
+Phase 4: the AI assistant of the public site and its admin screens. The visitor asks in the hero input, the drawer or the chat embedded in a case page; the API answers with **Claude Sonnet 5.5** over **Server-Sent Events**, using only the knowledge base (published cases and FAQs), citing its sources, and turning interest into leads and meetings.
+
+| Piece | What it is |
+|---|---|
+| Knowledge base | Chunks of every **published** case translation with `includeInKnowledgeBase = true`, and of every published FAQ translation, **per locale**, embedded with Voyage AI (`voyage-3.5`, 1024 dimensions) in pgvector. Anonymised clients (`anonymizeClient`) are never indexed, not even inside the text. Kept in sync automatically (10.6) |
+| Chat | `POST /assistant/chat` (public), streaming SSE (10.1–10.3) |
+| Tools of the model | `buscar_casos` (search), `crear_lead` (lead with source `CHAT_IA`), `agendar_reunion` (Google Calendar or a meeting request) (10.4) |
+| Admin | Conversations, assistant settings, "Probar pregunta", FAQs, knowledge status and reindex, unanswered questions, dashboard stats (10.7–10.11) |
+
+### 10.1 `POST /assistant/chat` (public)
+
+The browser calls it **directly** (`${NEXT_PUBLIC_API_URL}/api/v1/assistant/chat`); CORS allows the origins in `CORS_ORIGINS` (front-mwp `http://localhost:3000` in dev). `EventSource` cannot send a POST body, so use `fetch` and read the body stream (example in 10.3).
+
+**Request** (`Content-Type: application/json`):
+
+```json
+{
+  "conversationId": "cmwvjm3l80001j0uq2dua9dtw",
+  "visitorId": "5f0c2b7e-8a7d-4a51-9b6e-0d3c7d8e2a10",
+  "locale": "es",
+  "message": "¿Tienen experiencia con sistemas para contadores?",
+  "caseSlug": "contaflow-ia"
+}
+```
+
+| Field | Required | Rules |
+|---|---|---|
+| `conversationId` | no | Omit it (or send `null`) for the first message; the first SSE event returns the new id. Send it back with every next message. Format: lowercase letters and digits, 10–40 characters (a cuid) |
+| `visitorId` | yes | Random id generated **once per browser** (e.g. `crypto.randomUUID()`, kept in `localStorage`). 8–64 characters: letters, digits, `-`, `_`. A conversation only accepts the visitor that started it |
+| `locale` | yes | `es` \| `en` (lowercase, the site locale). The assistant answers in the language the visitor writes in, falling back to this one; the knowledge of this locale is searched first |
+| `message` | yes | Trimmed, 1–1000 characters |
+| `caseSlug` | no | Slug **in `locale`** of the case page the chat is embedded in ("La IA conoce este proyecto"). The assistant knows which case "este proyecto" means, and that case's chunks are boosted in the search. An unknown or unpublished slug is ignored (no error) |
+
+Any other property is rejected with **400** (like every endpoint).
+
+**Errors before the stream starts** are plain JSON in the shared error format (section 1), so check `response.ok` (and `Content-Type`) before reading the stream:
+
+| Status | When | `message` / `details` |
+|---|---|---|
+| 400 | Invalid body | `message` is a `string[]` (Spanish, like every validation error) |
+| 404 | `conversationId` unknown, or it belongs to another `visitorId` | `"Conversación no encontrada"` / `"Conversation not found"` (by `locale`). Start a new conversation (drop the stored id) |
+| 429 | More than **10 messages per minute** from the same IP **or** the same `visitorId` | `"Demasiados mensajes seguidos. Espera un minuto y vuelve a intentarlo."` / `"Too many messages in a row. Wait a minute and try again."`; `details: { "reason": "rate_limit" }`; `Retry-After` header (seconds) |
+| 429 | The conversation already has `maxMessagesPerSession` visitor messages (setting, default 20) | `"Has alcanzado el límite de 20 mensajes en esta conversación. …"` / English; `details: { "reason": "session_limit", "limit": 20 }`. Offer the contact form; a new conversation starts the count again |
+| 503 | The API has no `ANTHROPIC_API_KEY` | `"El asistente no está disponible en este momento. Inténtalo de nuevo en unos minutos."` / English |
+
+```json
+{
+  "statusCode": 429,
+  "error": "Too Many Requests",
+  "message": "You have reached the limit of 20 messages in this conversation. If you want to continue, write to us from the contact page and we will get back to you.",
+  "details": { "reason": "session_limit", "limit": 20 },
+  "path": "/api/v1/assistant/chat",
+  "timestamp": "2026-11-25T03:07:20.118Z"
+}
+```
+
+> Rate limiting is in memory, per API instance. Behind Apache every request reaches the API from `127.0.0.1` until `trust proxy` is configured (Phase 7), so until then the per-IP limit is shared by everybody and the **per-`visitorId`** limit is the effective one per visitor. Keep the `visitorId` stable per browser.
+
+### 10.2 SSE response
+
+**200** with these headers:
+
+```http
+Content-Type: text/event-stream; charset=utf-8
+Cache-Control: no-store
+X-Accel-Buffering: no
+Connection: keep-alive
+```
+
+The body is a sequence of events. Each event is `event: <name>`, one `data: <JSON>` line and a blank line. Lines starting with `:` are **keep-alive comments**, sent every 15 s: ignore them.
+
+| Event | `data` | When |
+|---|---|---|
+| `conversation` | `{ "conversationId": string }` | Always **first**. Store the id for the next messages |
+| `tool` | `{ "name": "buscar_casos" \| "crear_lead" \| "agendar_reunion", "status": "started" \| "completed" \| "failed" }` | Zero or more, around each tool call (a `started` is always followed by `completed` or `failed`). Use it for "Buscando en los casos…", "Registrando tus datos…", "Revisando la agenda…" |
+| `delta` | `{ "text": string }` | Answer text to **append**, in order. Simple Markdown (bold, lists, paragraphs separated by `\n\n`; no headings or tables). Citation markers are already removed |
+| `lead` | `{ "created": boolean }` | The visitor's contact data was stored (`true` = new lead, `false` = the lead of this conversation was updated) |
+| `meeting` | `{ "status": "BOOKED" \| "REQUESTED", "start": string, "meetLink": string \| null }` | `BOOKED`: created in Google Calendar, the visitor gets the invitation; `meetLink` is the Google Meet URL. `REQUESTED`: stored for the team to confirm by email (`meetLink: null`). `start` is ISO 8601 UTC: format it in the visitor's zone. Not sent when the slot was unavailable (the answer then proposes alternatives) |
+| `sources` | `[{ "sourceKey": string, "title": string, "url": string \| null }]` | Exactly once, right before `done` (may be `[]`). The cited sources, one per case or FAQ, in citation order: "Caso citado" / "Fuentes usadas" |
+| `done` | `{ "messageId": string, "stopReason": string, "unanswered": boolean, "content": string, "usage": Usage }` | **Last** event of a successful turn |
+| `error` | `{ "message": string }` | **Last** event when the turn failed after the stream started (Claude API down, overloaded…). The message is in the visitor's locale and safe to show. No `sources`/`done` follow |
+
+Rules for the front:
+
+- A stream ends with **exactly one** of `done` or `error`. If the connection closes without either, treat it as an error.
+- `tool`, `lead` and `meeting` may arrive between `delta` events. Don't assume a fixed order except: `conversation` first, then `sources` and `done` last.
+- `done.content` is the final answer as stored (the concatenated deltas, trimmed). **When `done.stopReason` is `"refusal"`, replace the bubble with `done.content`** (a friendly "I can't help with that" message): any text streamed before the refusal was discarded.
+- `done.unanswered: true` means the knowledge base had nothing relevant; the answer already offers to talk to the team. You may show the contact / "agendar llamada" actions more prominently.
+- `sources[].url` is a **path on front-mwp** (`/es/casos/contaflow-ia`, `/en/casos/contaflow-ia`); use it in `<Link>`. FAQs have `url: null` (there is no FAQ page): show them as plain text. `sourceKey` starts with `caso:` or `faq:`. For the "Caso citado" card (tagline, cover), take the slug from the end of `url` and use `GET /cases/:slug?locale=` (cached).
+- If the answer cites nothing but the search found relevant fragments, `sources` lists those (at most 3), so a card can still be shown.
+- **Stopping:** abort the `fetch` (AbortController) when the visitor closes the drawer or leaves. The API stops the generation and stores what was written (`stopReason: "aborted"`); no more events are sent.
+- One message at a time per conversation: wait for `done`/`error` before sending the next one.
+
+`stopReason`:
+
+| Value | Meaning |
+|---|---|
+| `end_turn` | Normal answer |
+| `max_tokens` | The answer hit the length cap (rare; `content` is what was written, or a "couldn't finish, rephrase" message) |
+| `tool_limit` | The model kept calling tools (4 rounds); it answered with what it had |
+| `refusal` | Claude's safety system declined (after the automatic fallback). `content` is a friendly message |
+| `pause_turn`, `stop_sequence`, `model_context_window_exceeded` | Not expected; handle like `end_turn` |
+
+`Usage` (also stored on the message, for the cost dashboard):
+
+```json
+{ "inputTokens": 6, "outputTokens": 366, "cacheReadInputTokens": 3159, "cacheCreationInputTokens": 3728, "requests": 2 }
+```
+
+Totals of the turn: one model request per tool round (`requests`). `inputTokens` are the uncached input tokens; with prompt caching almost all of the prompt is read from or written to the cache.
+
+### 10.3 Example
+
+Request `{ "visitorId": "…", "locale": "es", "message": "¿Tienen experiencia con sistemas para contadores?" }`. Stream from the real smoke test (text shortened):
+
+```text
+event: conversation
+data: {"conversationId":"cmwvjg9wk0007j0uqwmn1x0rt"}
+
+event: tool
+data: {"name":"buscar_casos","status":"started"}
+
+event: tool
+data: {"name":"buscar_casos","status":"completed"}
+
+event: delta
+data: {"text":"Sí. Hicimos **ContaFlow IA**, una plataforma SaaS para estudios contables en Perú.\n\n- **Qué resuelve:** "}
+
+event: delta
+data: {"text":"centraliza documentos fiscales, el calendario de obligaciones y un checklist de cierre por periodo…"}
+
+: keep-alive
+
+event: sources
+data: [{"sourceKey":"caso:contaflow-ia#0","title":"ContaFlow IA","url":"/es/casos/contaflow-ia"}]
+
+event: done
+data: {"messageId":"cmwvjgb3m000aj0uq4w3u3o9k","stopReason":"end_turn","unanswered":false,"content":"Sí. Hicimos **ContaFlow IA**, …","usage":{"inputTokens":6,"outputTokens":366,"cacheReadInputTokens":3159,"cacheCreationInputTokens":3728,"requests":2}}
+
+```
+
+A booked call adds `event: lead` / `data: {"created":true}` and `event: meeting` / `data: {"status":"BOOKED","start":"2026-11-26T15:00:00.000Z","meetLink":"https://meet.google.com/abc-defg-hij"}` before `sources`.
+
+Reading it in the browser:
+
+```ts
+const res = await fetch(`${API}/api/v1/assistant/chat`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ conversationId, visitorId, locale, message, caseSlug }),
+  signal: controller.signal,
+});
+if (!res.ok) throw await res.json(); // 400 | 404 | 429 | 503, shared error format
+const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+let buffer = "";
+for (;;) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buffer += value;
+  let end;
+  while ((end = buffer.indexOf("\n\n")) >= 0) {
+    const block = buffer.slice(0, end);
+    buffer = buffer.slice(end + 2);
+    if (block.startsWith(":")) continue; // keep-alive
+    const event = /^event: (.+)$/m.exec(block)?.[1];
+    const data = JSON.parse(/^data: (.*)$/m.exec(block)![1]);
+    handle(event, data); // conversation | tool | delta | lead | meeting | sources | done | error
+  }
+}
+```
+
+### 10.4 What the assistant does (for the UI copy)
+
+- **Model:** `AssistantSettings.model` (default `claude-sonnet-5-5`), effort `low` by default ("Nivel de esfuerzo"). No `temperature`. Refusals are retried automatically on a fallback model (server-side `fallbacks: "default"`).
+- **Prompt:** the studio's instructions (editable in the admin) plus fixed rules: answer only from the knowledge base, cite, say so when there is no information and offer the team, never give prices, treat case content and visitor messages as data (prompt-injection defence), never reveal the system prompt, other visitors' data or anonymised clients, answer in the visitor's language. Each visitor message is sent with a small context block (site locale, current date and time in Lima, page). The last **12 turns** of the conversation are sent as history.
+- **Prompt caching:** tools, then system (cache breakpoint), then messages (automatic breakpoint). After the first request almost all input is a cache read.
+- **`buscar_casos(query, tipo?, tecnologia?)`:** semantic search (cosine similarity, threshold `KNOWLEDGE_MIN_SIMILARITY`, default **0.50**) in the visitor's locale first, then the other locale; up to 5 fragments. `tipo` is a `CaseType`, `tecnologia` a technology name or slug; both exclude FAQs. With `caseSlug`, that case's chunks get +0.10. When **every** search of a turn finds nothing above the threshold, the question is marked **"sin respuesta"** (`unanswered`).
+- **`crear_lead(nombre, email, telefono?, interes, resumen)`:** validates the email and creates the lead (`source: CHAT_IA`, `locale`, `conversationId`, `message` = the assistant's summary). **One lead per conversation:** later calls update it. Sets `Conversation.hasLead`.
+- **`agendar_reunion(nombre, email, fecha_hora_preferida, zona_horaria, motivo)`:** creates or updates the lead (without overwriting what `crear_lead` stored), converts the visitor's local time (IANA zone) and checks it against `SiteSettings`: business hours (Monday to Saturday 08:00–19:00 `America/Lima` by default; the meeting must **end** by closing time; never on a closed day such as Sunday), `meetingDurationMinutes` (30), at least 2 hours of notice and at most 60 days ahead.
+  - **With Google Calendar** (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`): `freeBusy` on the studio's **primary** calendar. Free: event with a Google Meet link, the visitor invited (`sendUpdates=all`), `Meeting` `BOOKED` with `googleEventId`. Busy or outside hours: up to **3 free alternatives** (30-minute steps, inside business hours, within 14 days), which the assistant proposes in both time zones. The busy periods of the agenda are never exposed. If Google fails, the request is stored as `REQUESTED`.
+  - **Without Google Calendar** (the current setup): `Meeting` `REQUESTED` at the preferred time (or alternatives within business hours) and the team confirms by email.
+  - One booked meeting per conversation; a new request replaces a pending one.
+
+### 10.5 Data stored per conversation
+
+`Conversation` (`id`, `visitorId`, `locale`, `caseSlug`, `hasLead`, `unanswered`, `messageCount`, `lastMessageAt`, `ipHash` = HMAC of the IP, never the IP) and its `Message` rows: the visitor message (with the context sent to the model) and the final answer with `sources`, `toolCalls` (name, input, status and a short outcome, no fragment texts), `usage`, `model` (the model that answered; a fallback model after a refusal) and `stopReason`. A failed turn stores an answer with `stopReason: "error"`.
+
+### 10.6 Knowledge base sync
+
+Automatic and **fire-and-forget** (like the revalidation webhook: the admin request never waits for it or fails because of it), on one in-process queue:
+
+| Change | Effect |
+|---|---|
+| `PATCH /admin/cases/:id`, publish, unpublish, `DELETE` | The case is re-chunked (every locale); unchanged chunks keep their embeddings, removed ones are deleted |
+| FAQ `PATCH`, publish, unpublish, `DELETE` | Same for the FAQ |
+| `POST /admin/knowledge/reindex` | Everything, plus removal of chunks whose source is no longer eligible. All changed chunks are embedded in as few Voyage requests as possible |
+
+Chunk ids (`sourceKey`): `caso:<slug of that locale>#<n>` and `faq:<faqId>#<n>`. Chunks are about 300–800 tokens: one per short case or FAQ, more for long ones; each repeats a header (title, tagline, type, industry, year, client unless anonymised, technologies). Gallery blocks are not indexed. The seed does **not** index: after `npm run db:seed`, call `POST /admin/knowledge/reindex` once ("Reindexar ahora").
+
+### 10.7 Admin: knowledge base
+
+`GET /admin/knowledge/status` returns **200**:
+
+```json
+{
+  "state": "SYNCED",
+  "label": "Sincronizada",
+  "embeddingModel": "voyage-3.5",
+  "dimension": 1024,
+  "embeddingsConfigured": true,
+  "minSimilarity": 0.5,
+  "totals": { "sources": 16, "chunks": 16 },
+  "counts": [
+    { "sourceType": "CASE", "locale": "ES", "sources": 5, "chunks": 5 },
+    { "sourceType": "CASE", "locale": "EN", "sources": 5, "chunks": 5 },
+    { "sourceType": "FAQ", "locale": "ES", "sources": 3, "chunks": 3 },
+    { "sourceType": "FAQ", "locale": "EN", "sources": 3, "chunks": 3 }
+  ],
+  "pending": { "count": 0, "items": [] },
+  "lastIndexedAt": "2026-11-25T03:02:47.801Z",
+  "lastRun": {
+    "id": "cmwvjg8ve00016kuqkkmf6azy",
+    "status": "SUCCEEDED",
+    "startedAt": "2026-11-25T03:02:47.019Z",
+    "finishedAt": "2026-11-25T03:02:47.808Z",
+    "sourcesCount": 16,
+    "chunksCount": 16,
+    "embeddedCount": 10,
+    "removedCount": 0,
+    "error": null
+  }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `state` / `label` | `SYNCED` "Sincronizada" (nothing pending), `PENDING` "Cambios pendientes", `INDEXING` "Indexando…" (a full reindex is running). Show `label` in the dashboard card |
+| `pending.items` | Up to 50 `{ sourceType: "CASE" \| "FAQ", sourceId, locale: "ES" \| "EN", title, reason: "new" \| "changed" \| "removed" }`: what a reindex would change. Briefly non-empty right after an edit while the automatic sync runs; permanently if Voyage fails |
+| `counts` | Always the four rows. A "source" is one case or FAQ in one locale |
+| `embeddingsConfigured` | `false` when the API has no `VOYAGE_API_KEY`: nothing can be indexed or searched |
+| `lastRun` | Last full reindex or `null`. `status`: `RUNNING` \| `SUCCEEDED` \| `FAILED` (`error` holds the reason, e.g. a Voyage rate limit). `embeddedCount` = chunks whose embedding was recomputed |
+
+`POST /admin/knowledge/reindex` (no body) returns **202** `{ "runId": "cm…", "status": "RUNNING", "startedAt": "…" }`. Poll `GET /admin/knowledge/status` every 2–3 s until `state` is not `INDEXING`, then read `lastRun`. **409** `"Ya hay una reindexación en curso. Espera a que termine."` while one is running.
+
+### 10.8 Admin: FAQs
+
+Knowledge base FAQs ("Base de conocimiento", "Crear FAQ" from an unanswered question). Bilingual, published **per locale** like cases; only published translations are indexed. There is no public endpoint.
+
+**AdminFaq** (returned by every endpoint below):
+
+```json
+{
+  "id": "cmwviy6wl0003n4uqokry7xgo",
+  "sortOrder": 2,
+  "translations": {
+    "ES": { "question": "¿Cuánto tiempo toma desarrollar un proyecto?", "answer": "Depende del alcance…", "status": "PUBLISHED", "publishedAt": "2026-11-25T02:48:40.131Z" },
+    "EN": null
+  },
+  "createdAt": "…",
+  "updatedAt": "…"
+}
+```
+
+| Method and path | Body | Response |
+|---|---|---|
+| `GET /admin/faqs?page&limit&q&status` | — | **200** `{ data: AdminFaq[], meta }`. `q` searches question and answer of both locales (≤ 200); `status` `draft` \| `published` (any locale). Order: `sortOrder`, then creation |
+| `GET /admin/faqs/:id` | — | **200**, **404** `"Pregunta frecuente no encontrada"` |
+| `POST /admin/faqs` | `{ "translations": { "ES"?: { "question": string, "answer"?: string }, "EN"?: … } }` (at least one locale) | **201**. Every locale starts as `DRAFT`; `answer` defaults to `""`; the FAQ goes last |
+| `PATCH /admin/faqs/:id` | `{ "sortOrder"?: int ≥ 0, "translations"?: { "ES"?: { "question"?, "answer"? }, "EN"?: … } }` | **200**. Creates a missing locale (it needs `question`). A published locale cannot be left without question or answer (**422**, `details.missing`) |
+| `POST /admin/faqs/:id/publish` | `{ "locale": "ES" \| "EN" }` (lowercase accepted) | **200**, **422** `"No se puede publicar la versión ES. Falta: respuesta"` with `details: { locale, missing: ["question" \| "answer"] }` |
+| `POST /admin/faqs/:id/unpublish` | `{ "locale" }` | **200**, **404** when the locale does not exist |
+| `DELETE /admin/faqs/:id` | — | **204** (soft delete; its chunks are removed) |
+
+`question`: trimmed, 1–300 characters. `answer`: Markdown, ≤ 10 000, stored as sent. Each mutation schedules the knowledge sync of the FAQ.
+
+### 10.9 Admin: conversations
+
+`GET /admin/conversations?page&limit&filter&q`
+
+| Query | Default | Values |
+|---|---|---|
+| `page`, `limit` | 1, 20 | Like every admin list (limit ≤ 100) |
+| `filter` | `all` | `all` \| `lead` (`hasLead`) \| `unanswered` (at least one question without an answer) |
+| `q` | | Case-insensitive search in **every message** and in the lead's name and email (≤ 200) |
+
+**200** (most recent activity first):
+
+```json
+{
+  "data": [
+    {
+      "id": "cmwvjg9wk0007j0uqwmn1x0rt",
+      "locale": "ES",
+      "caseSlug": null,
+      "firstQuestion": "¿Tienen experiencia con sistemas para contadores?",
+      "messageCount": 4,
+      "hasLead": true,
+      "unanswered": false,
+      "createdAt": "2026-11-25T03:03:12.004Z",
+      "lastMessageAt": "2026-11-25T03:04:31.950Z",
+      "lead": { "id": "cm…", "name": "Ana Torres", "email": "ana@example.com", "status": "NEW" }
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 1 }
+}
+```
+
+`firstQuestion` is truncated to 300 characters; `messageCount` counts visitor and assistant messages; `lead` is `null` when there is none.
+
+`GET /admin/conversations/:id` returns **200** with the transcript:
+
+```json
+{
+  "id": "cmwvjg9wk0007j0uqwmn1x0rt",
+  "visitorId": "smoke-1764039767",
+  "locale": "ES",
+  "caseSlug": null,
+  "hasLead": false,
+  "unanswered": false,
+  "messageCount": 2,
+  "createdAt": "…",
+  "lastMessageAt": "…",
+  "lead": null,
+  "meetings": [],
+  "messages": [
+    {
+      "id": "cm…", "role": "USER", "content": "¿Tienen experiencia con sistemas para contadores?",
+      "locale": "ES", "caseSlug": null, "sources": [], "toolCalls": [], "usage": null,
+      "model": null, "stopReason": null, "unanswered": false, "createdAt": "…"
+    },
+    {
+      "id": "cm…", "role": "ASSISTANT", "content": "Sí. Hicimos **ContaFlow IA**…",
+      "locale": null, "caseSlug": null,
+      "sources": [{ "sourceKey": "caso:contaflow-ia#0", "title": "ContaFlow IA", "url": "/es/casos/contaflow-ia" }],
+      "toolCalls": [
+        {
+          "id": "toolu_018LfmxToRpiAsJ3jZp5Q3Zf",
+          "name": "buscar_casos",
+          "input": { "query": "sistema para estudios contables y contadores" },
+          "status": "completed",
+          "summary": {
+            "results": [{ "sourceKey": "caso:contaflow-ia#0", "similarity": 0.563 }],
+            "bestScore": 0.563, "threshold": 0.5, "otherLocale": false
+          }
+        }
+      ],
+      "usage": { "inputTokens": 6, "outputTokens": 366, "cacheReadInputTokens": 3159, "cacheCreationInputTokens": 3728, "requests": 2 },
+      "model": "claude-sonnet-5-5", "stopReason": "end_turn", "unanswered": false, "createdAt": "…"
+    }
+  ]
+}
+```
+
+- `lead`: `{ id, name, email, phone, interest, message, status, createdAt }` or `null`. `meetings`: `{ id, status: "REQUESTED" | "BOOKED" | "CANCELLED", start, end, timezone (the visitor's), meetLink, googleEventId }[]`.
+- `unanswered` is set on the **USER** message that found nothing ("sin respuesta"); `sources`, `toolCalls`, `usage`, `model` and `stopReason` on ASSISTANT messages.
+- `toolCalls[].summary` by tool: `buscar_casos`: `{ results: [{ sourceKey, similarity }], bestScore, threshold, otherLocale }`; `crear_lead`: `{ leadId, created }`; `agendar_reunion`: `{ leadId, status: "BOOKED" | "REQUESTED" | "UNAVAILABLE" | "ALREADY_BOOKED", meetingId?, start?, reason?, alternatives? }`. A call with `status: "failed"` carries `summary.error`.
+- `stopReason` also takes `"aborted"` (the visitor left) and `"error"` (the turn failed; `content` is the error shown to the visitor).
+- **404** `"Conversación no encontrada"`.
+
+### 10.10 Admin: assistant settings, test and unanswered questions
+
+`GET /admin/assistant/settings` returns **200**; `PUT /admin/assistant/settings` with **the whole object** (every field below except `updatedAt` is required) returns **200** with the saved settings:
+
+```json
+{
+  "model": "claude-sonnet-5-5",
+  "effort": "low",
+  "instructions": "Eres el asistente de miwebprofesional, un estudio de desarrollo de software de Lima (Perú)…",
+  "enabledTools": ["buscar_casos", "crear_lead", "agendar_reunion"],
+  "maxMessagesPerSession": 20,
+  "updatedAt": "2026-11-25T02:48:40.120Z"
+}
+```
+
+| Field | Rules |
+|---|---|
+| `model` | `claude-sonnet-5-5` (default, team decision) \| `claude-opus-5-5` \| `claude-haiku-4-5` |
+| `effort` | `low` \| `medium` \| `high` ("Nivel de esfuerzo": Bajo / Medio / Alto; replaces "Creatividad"). Ignored by Haiku 4.5. Sonnet 5.5's levels are recalibrated: measure with the evaluation set before raising it |
+| `instructions` | Trimmed, 1–8000 characters. The fixed rules (10.4) are always added after them and cannot be edited |
+| `enabledTools` | Subset of `buscar_casos`, `crear_lead`, `agendar_reunion` (no repeats; `[]` allowed). Returned in that fixed order |
+| `maxMessagesPerSession` | Integer 1–100: visitor messages per conversation |
+| `updatedAt` | Read-only (rejected in the PUT) |
+
+**400** for any other value or property (e.g. `temperature`). Changes apply to the next chat message.
+
+`POST /admin/assistant/test` ("Probar pregunta sobre este caso") returns **200** JSON. **No streaming, nothing stored**, and only `buscar_casos` is offered (no leads or meetings):
+
+```jsonc
+// Request
+{ "question": "¿Qué problema resolvió este proyecto?", "locale": "es", "caseSlug": "contaflow-ia" }
+// Response
+{
+  "answer": "ContaFlow IA centralizó los documentos fiscales…",
+  "sources": [{ "sourceKey": "caso:contaflow-ia#0", "title": "ContaFlow IA", "url": "/es/casos/contaflow-ia" }],
+  "usage": { "inputTokens": 6, "outputTokens": 180, "cacheReadInputTokens": 2900, "cacheCreationInputTokens": 400, "requests": 2 },
+  "model": "claude-sonnet-5-5",
+  "stopReason": "end_turn",
+  "unanswered": false,
+  "toolCalls": [{ "id": "toolu_…", "name": "buscar_casos", "input": { "query": "…" }, "status": "completed", "summary": { "results": [{ "sourceKey": "caso:contaflow-ia#0", "similarity": 0.61 }], "bestScore": 0.71, "threshold": 0.5, "otherLocale": false } }]
+}
+```
+
+`question` 1–1000, `locale` `es` \| `en`, `caseSlug` optional (slug in that locale). It uses the **saved** settings: save them before testing new instructions. The case must be **published** for its chunks to exist. **503** without `ANTHROPIC_API_KEY`; a Claude failure returns **500** in the shared format. It takes a few seconds: show a spinner.
+
+`GET /admin/assistant/unanswered?days=7` (`days` 1–365, default 7) returns **200**, for the "Crear FAQ" banner and the dashboard:
+
+```json
+{
+  "days": 7,
+  "count": 1,
+  "questions": [
+    { "messageId": "cm…", "conversationId": "cm…", "question": "¿Hacen apps para relojes inteligentes?", "locale": "ES", "createdAt": "2026-11-25T03:07:20.118Z" }
+  ]
+}
+```
+
+`count` is the total in the period; `questions` holds the latest 20.
+
+### 10.11 Admin: dashboard
+
+`GET /admin/stats/overview?days=30` (`days` 1–365, default 30) returns **200**:
+
+```json
+{
+  "range": { "days": 7, "from": "2026-11-19", "to": "2026-11-25", "timeZone": "America/Lima" },
+  "totals": { "visits": 0, "conversations": 6, "newLeads": 1, "unanswered": 1 },
+  "series": [
+    { "date": "2026-11-19", "conversations": 0, "leads": 0 },
+    { "date": "2026-11-25", "conversations": 6, "leads": 1 }
+  ],
+  "topQuestions": [{ "question": "¿Tienen experiencia con sistemas para contadores?", "count": 2 }],
+  "latestLeads": [
+    { "id": "cm…", "name": "Ana Torres", "email": "ana@example.com", "source": "CHAT_IA", "status": "NEW", "interest": "Plataforma SaaS", "createdAt": "…" }
+  ]
+}
+```
+
+- Days are calendar days in the site time zone (`SiteSettings.timezone`), from `today - days + 1` to today; `series` has **one entry per day** (zeros included), oldest first (the example omits the middle days).
+- `visits`: sum of `PageView` counts in the period (0 until the front records visits). `conversations`: started in the period. `newLeads`: non-deleted leads created in the period (any source). `unanswered`: visitor questions marked "sin respuesta".
+- `topQuestions`: up to 5 first questions of the period's conversations, grouped ignoring case, accents and punctuation. `latestLeads`: the 5 newest leads (any date).
+
+### 10.12 Errors and limits summary
+
+| Limit | Value |
+|---|---|
+| Chat message | 1–1000 characters |
+| Chat rate | 10 messages per minute per IP and per `visitorId` (429 `rate_limit`) |
+| Messages per conversation | `maxMessagesPerSession` (default 20, 1–100) visitor messages (429 `session_limit`) |
+| History sent to the model | Last 12 turns |
+| Tool rounds per answer | 4 |
+| Search | 5 fragments, similarity ≥ `KNOWLEDGE_MIN_SIMILARITY` (0.50) |
+| Meetings | Business hours of `SiteSettings`, `meetingDurationMinutes`, ≥ 2 h notice, ≤ 60 days ahead, ≤ 3 alternatives |
+
+| Status | Assistant endpoints |
+|---|---|
+| 202 | `POST /admin/knowledge/reindex` started |
+| 400 | Validation |
+| 401 / 403 | Admin endpoints without a valid token / with a role other than `ADMIN` or `EDITOR` |
+| 404 | Unknown or foreign conversation, unknown FAQ |
+| 409 | A reindex is already running |
+| 422 | Publishing (or emptying a published) FAQ translation that is incomplete |
+| 429 | Chat rate limit or session limit (`details.reason`) |
+| 503 | No `ANTHROPIC_API_KEY` (chat and test) |

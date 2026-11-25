@@ -520,3 +520,54 @@ export const siteSettings = {
   timezone: 'America/Lima',
   meetingDurationMinutes: 30,
 };
+
+export interface FaqSeed {
+  translations: Record<Locale, { question: string; answer: string }>;
+}
+
+// Knowledge base FAQs (Phase 4). Generic on purpose: no prices, no promises
+// the team has not made. Review them in the admin (Base de conocimiento).
+export const faqs: FaqSeed[] = [
+  {
+    translations: {
+      ES: {
+        question: '¿Dan soporte después de lanzar el proyecto?',
+        answer:
+          'Sí. Después del lanzamiento acompañamos un periodo de estabilización en el que corregimos los errores que aparezcan en lo que entregamos.\n\nLuego podemos acordar un plan de mantenimiento según lo que necesite cada proyecto: actualizaciones de dependencias y seguridad, monitoreo, copias de seguridad y nuevas mejoras. La duración, el alcance y la forma de atención se definen en la propuesta de cada proyecto.',
+      },
+      EN: {
+        question: 'Do you provide support after launch?',
+        answer:
+          'Yes. After launch we stay on for a stabilization period in which we fix any bugs that show up in what we delivered.\n\nAfter that we can agree on a maintenance plan that fits each project: dependency and security updates, monitoring, backups and new improvements. The duration, scope and support channels are defined in the proposal for each project.',
+      },
+    },
+  },
+  {
+    translations: {
+      ES: {
+        question: '¿Cuánto tiempo toma desarrollar un proyecto?',
+        answer:
+          'Depende del alcance: una web con CMS no requiere lo mismo que una plataforma SaaS con integraciones. Por eso no damos un plazo fijo de antemano.\n\nEmpezamos con una conversación para entender el objetivo, los usuarios y las integraciones necesarias. Con eso preparamos una propuesta con el alcance, las etapas y una estimación de tiempos. Trabajamos por entregas: en cada etapa revisas avances funcionando y puedes ajustar prioridades.',
+      },
+      EN: {
+        question: 'How long does it take to build a project?',
+        answer:
+          'It depends on the scope: a website with a CMS does not take the same as a SaaS platform with integrations, so we do not quote a fixed timeline up front.\n\nWe start with a conversation to understand the goal, the users and the integrations you need. From there we prepare a proposal with the scope, the stages and a time estimate. We work in iterations: at every stage you review working progress and can adjust priorities.',
+      },
+    },
+  },
+  {
+    translations: {
+      ES: {
+        question: '¿Cómo es el proceso de pago?',
+        answer:
+          'El costo depende del alcance de cada proyecto, así que primero conversamos y después el equipo prepara un presupuesto a medida; no manejamos precios cerrados de catálogo.\n\nEl calendario de pagos se acuerda en la propuesta, normalmente dividido en hitos ligados a las entregas del proyecto. Si quieres un presupuesto, puedes dejar tus datos o agendar una llamada con el equipo.',
+      },
+      EN: {
+        question: 'How does the payment process work?',
+        answer:
+          'The cost depends on the scope of each project, so we talk first and then the team prepares a tailored quote; we do not have fixed catalogue prices.\n\nThe payment schedule is agreed in the proposal, usually split into milestones tied to the project deliveries. If you would like a quote, you can leave your details or book a call with the team.',
+      },
+    },
+  },
+];

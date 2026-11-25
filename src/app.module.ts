@@ -3,9 +3,13 @@ import { ConfigModule } from '@nestjs/config';
 import { validateEnv } from './config/env.js';
 import { HealthModule } from './health/health.module.js';
 import { RevalidationModule } from './common/revalidation/revalidation.module.js';
+import { AssistantModule } from './modules/assistant/assistant.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { BlogModule } from './modules/blog/blog.module.js';
 import { CasesModule } from './modules/cases/cases.module.js';
+import { ConversationsModule } from './modules/conversations/conversations.module.js';
+import { FaqsModule } from './modules/faqs/faqs.module.js';
+import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { ServicesModule } from './modules/services/services.module.js';
 import { StatsModule } from './modules/stats/stats.module.js';
 import { TechnologiesModule } from './modules/technologies/technologies.module.js';
@@ -27,12 +31,16 @@ import { PrismaModule } from './prisma/prisma.module.js';
     UsersModule,
     AuthModule,
     RevalidationModule,
+    KnowledgeModule,
     CasesModule,
     TechnologiesModule,
     ServicesModule,
     BlogModule,
     StatsModule,
     UploadsModule,
+    FaqsModule,
+    ConversationsModule,
+    AssistantModule,
     // Distributed tracing, logs and metrics: https://observe.nestjs.com
     ...(observeEnabled
       ? [

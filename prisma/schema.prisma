@@ -87,6 +87,39 @@ enum LeadStatus {
   @@map("lead_status")
 }
 
+/// Where a knowledge chunk comes from.
+enum KnowledgeSourceType {
+  CASE
+  FAQ
+
+  @@map("knowledge_source_type")
+}
+
+enum IndexingRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@map("indexing_run_status")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+
+  @@map("message_role")
+}
+
+enum MeetingStatus {
+  /// Asked for through the assistant; the team confirms it by email.
+  REQUESTED
+  /// Created in Google Calendar (with a Meet link and an invitation).
+  BOOKED
+  CANCELLED
+
+  @@map("meeting_status")
+}
+
 // ---------------------------------------------------------------------------
 // Users and sessions
 // ---------------------------------------------------------------------------
@@ -394,11 +427,14 @@ model Lead {
   /// Internal notes from the team.
   notes          String?
   locale         Locale     @default(ES)
-  /// Conversation that produced the lead. The FK is added in Phase 4.
+  /// Conversation that produced the lead (AI chat leads only).
   conversationId String?    @map("conversation_id")
   createdAt      DateTime   @default(now()) @map("created_at")
   updatedAt      DateTime   @updatedAt @map("updated_at")
   deletedAt      DateTime?  @map("deleted_at")
+
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  meetings     Meeting[]
 
   @@index([status, createdAt])
   @@index([source])
@@ -445,4 +481,205 @@ model SiteSettings {
   updatedAt              DateTime @updatedAt @map("updated_at")
 
   @@map("site_settings")
+}
+
+// ---------------------------------------------------------------------------
+// AI assistant (Phase 4)
+// ---------------------------------------------------------------------------
+
+/// Frequently asked questions: a source of the assistant's knowledge base
+/// (there is no public FAQ page yet).
+model FaqDocument {
+  id        String    @id @default(cuid())
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  translations FaqDocumentTranslation[]
+
+  @@index([deletedAt, sortOrder])
+  @@map("faq_documents")
+}
+
+model FaqDocumentTranslation {
+  id            String            @id @default(cuid())
+  faqDocumentId String            @map("faq_document_id")
+  locale        Locale
+  question      String
+  /// Markdown.
+  answer        String            @default("")
+  status        PublicationStatus @default(DRAFT)
+  publishedAt   DateTime?         @map("published_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  faqDocument FaqDocument @relation(fields: [faqDocumentId], references: [id], onDelete: Cascade)
+
+  @@unique([faqDocumentId, locale])
+  @@index([locale, status])
+  @@map("faq_document_translations")
+}
+
+/// A fragment of a published case or FAQ translation, with its embedding.
+/// Written by the knowledge indexer only (src/modules/knowledge). The HNSW
+/// cosine index on `embedding` (knowledge_chunks_embedding_hnsw_idx) is
+/// created in the migration SQL because Prisma cannot declare it: `migrate dev`
+/// will propose to DROP it in every new migration. Delete that line (README).
+model KnowledgeChunk {
+  id             String                       @id @default(cuid())
+  sourceType     KnowledgeSourceType          @map("source_type")
+  /// Case.id or FaqDocument.id.
+  sourceId       String                       @map("source_id")
+  locale         Locale
+  chunkIndex     Int                          @map("chunk_index")
+  /// Stable citation id: "caso:<slug of the locale>#<n>" or "faq:<id>#<n>".
+  sourceKey      String                       @map("source_key")
+  title          String
+  /// Public path on front-mwp ("/es/casos/<slug>"); null for FAQs.
+  url            String?
+  content        String
+  /// sha256 of `content`: an unchanged chunk keeps its embedding on reindex.
+  contentHash    String                       @map("content_hash")
+  /// Estimate (characters / 4).
+  tokenCount     Int?                         @map("token_count")
+  /// Filters of buscar_casos (cases only).
+  caseType       CaseType?                    @map("case_type")
+  /// Lowercase names and slugs of the case technologies.
+  technologies   String[]                     @default([])
+  /// Voyage model that produced `embedding` (VOYAGE_MODEL).
+  embeddingModel String                       @map("embedding_model")
+  /// Voyage embedding (1024 dimensions, unit length).
+  embedding      Unsupported("vector(1024)")?
+  createdAt      DateTime                     @default(now()) @map("created_at")
+  updatedAt      DateTime                     @updatedAt @map("updated_at")
+
+  @@unique([locale, sourceKey])
+  @@index([sourceType, sourceId])
+  @@map("knowledge_chunks")
+}
+
+/// A full reindex ("Reindexar ahora"). Only one may be RUNNING at a time.
+model IndexingRun {
+  id            String            @id @default(cuid())
+  status        IndexingRunStatus @default(RUNNING)
+  startedAt     DateTime          @default(now()) @map("started_at")
+  finishedAt    DateTime?         @map("finished_at")
+  /// Sources (case or FAQ translations) indexed.
+  sourcesCount  Int               @default(0) @map("sources_count")
+  chunksCount   Int               @default(0) @map("chunks_count")
+  /// Chunks whose embedding had to be computed (the rest were unchanged).
+  embeddedCount Int               @default(0) @map("embedded_count")
+  /// Chunks of sources that are no longer eligible, removed by the run.
+  removedCount  Int               @default(0) @map("removed_count")
+  error         String?
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  @@index([startedAt])
+  @@map("indexing_runs")
+}
+
+/// A chat session of a visitor with the assistant.
+model Conversation {
+  /// cuid: unguessable enough to act as the session handle of the public chat.
+  id            String   @id @default(cuid())
+  /// Random id generated by the browser; a conversation only accepts its own visitor.
+  visitorId     String   @map("visitor_id")
+  locale        Locale
+  /// Slug (in `locale`) of the case page where the chat started, if any.
+  caseSlug      String?  @map("case_slug")
+  hasLead       Boolean  @default(false) @map("has_lead")
+  /// True when buscar_casos found nothing relevant for at least one question.
+  unanswered    Boolean  @default(false)
+  /// User and assistant messages.
+  messageCount  Int      @default(0) @map("message_count")
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+  /// HMAC-SHA256 of the client IP (never the IP itself).
+  ipHash        String?  @map("ip_hash")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  messages Message[]
+  leads    Lead[]
+  meetings Meeting[]
+
+  @@index([visitorId])
+  @@index([lastMessageAt])
+  @@index([createdAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String      @map("conversation_id")
+  role           MessageRole
+  /// Text shown to the visitor (assistant: without citation markers).
+  content        String
+  /// USER only: request context sent to the model with the message (locale,
+  /// date, page). Stored so the replayed history is byte-identical (prompt cache).
+  context        String?
+  locale         Locale?
+  /// USER only: case page the message was sent from.
+  caseSlug       String?     @map("case_slug")
+  /// ASSISTANT: [{ sourceKey, title, url }] cited in the answer.
+  sources        Json        @default("[]")
+  /// ASSISTANT: [{ name, input, status, summary }].
+  toolCalls      Json        @default("[]") @map("tool_calls")
+  /// ASSISTANT: { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, requests }.
+  usage          Json?
+  model          String?
+  stopReason     String?     @map("stop_reason")
+  /// USER: the question found no relevant knowledge ("sin respuesta").
+  unanswered     Boolean     @default(false)
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([role, createdAt])
+  @@map("messages")
+}
+
+/// A call requested or booked through agendar_reunion.
+model Meeting {
+  id             String        @id @default(cuid())
+  leadId         String        @map("lead_id")
+  conversationId String?       @map("conversation_id")
+  googleEventId  String?       @map("google_event_id")
+  start          DateTime
+  end            DateTime
+  /// IANA time zone of the visitor (e.g. "America/Bogota").
+  timezone       String
+  meetLink       String?       @map("meet_link")
+  status         MeetingStatus @default(REQUESTED)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  lead         Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([leadId])
+  @@index([conversationId])
+  @@index([start])
+  @@map("meetings")
+}
+
+/// Singleton (id "default"): assistant configuration edited in the admin.
+model AssistantSettings {
+  id                    String   @id @default("default")
+  /// claude-sonnet-5-5 | claude-opus-5-5 | claude-haiku-4-5
+  model                 String   @default("claude-sonnet-5-5")
+  /// low | medium | high (output_config.effort; replaces "Creatividad")
+  effort                String   @default("low")
+  /// Instructions of the studio, placed before the fixed rules of the system prompt.
+  instructions          String
+  enabledTools          String[] @default(["buscar_casos", "crear_lead", "agendar_reunion"]) @map("enabled_tools")
+  /// Visitor messages allowed per conversation.
+  maxMessagesPerSession Int      @default(20) @map("max_messages_per_session")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("assistant_settings")
 }

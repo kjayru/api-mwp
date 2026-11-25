@@ -15,7 +15,7 @@ cp .env.example .env # en Windows: copy .env.example .env
 # Edita .env: JWT_SECRET y SEED_ADMIN_PASSWORD son obligatorios (ver abajo)
 npm run db:up        # PostgreSQL 17 + pgvector en localhost:5433
 npm run db:deploy    # aplica las migraciones
-npm run db:seed      # admin, ajustes, tecnologías, servicios, los 5 casos y el blog (idempotente)
+npm run db:seed      # admin, ajustes, tecnologías, servicios, los 5 casos, el blog y las FAQ (idempotente)
 npm run start:dev    # http://localhost:3001/api/v1
 ```
 
@@ -42,6 +42,11 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 | `PUBLIC_UPLOADS_URL` | no | `http://localhost:3001/uploads` | URL pública de `UPLOADS_DIR`; las subidas devuelven `<PUBLIC_UPLOADS_URL>/<aaaa>/<mm>/<archivo>` |
 | `FRONT_REVALIDATE_URL` | no | — | Webhook de revalidación de front-mwp (dev: `http://localhost:3000/api/revalidate`). Vacía = desactivado |
 | `REVALIDATE_SECRET` | sí, si hay `FRONT_REVALIDATE_URL` | — | Secreto compartido con front-mwp (cabecera `x-revalidate-secret`), mínimo 32 caracteres. **El mismo valor** en el `.env.local` de front-mwp |
+| `ANTHROPIC_API_KEY` | no (sí para el asistente) | — | Clave de la API de Claude. Sin ella la API arranca, pero el chat y "Probar pregunta" responden 503 |
+| `VOYAGE_API_KEY` | no (sí para el asistente) | — | Clave de Voyage AI (embeddings de la base de conocimiento). Sin ella no se indexa ni se busca. **Añade un método de pago en el panel de Voyage**: sin él la cuenta queda limitada a 3 peticiones/min y 10K tokens/min (cada pregunta que busca consume una) |
+| `VOYAGE_MODEL` | no | `voyage-3.5` | Modelo multilingüe de Voyage. Debe devolver vectores de **1024** dimensiones (columna `vector(1024)`): `voyage-3.5`, `voyage-3.5-lite` o la familia `voyage-4`. Cambiarlo exige "Reindexar ahora" |
+| `KNOWLEDGE_MIN_SIMILARITY` | no | `0.5` | Similitud coseno mínima (0–1) para que un fragmento cuente como relevante. Por debajo, `buscar_casos` no devuelve nada y la pregunta se marca "sin respuesta" |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | no (las tres o ninguna) | — | Google Calendar (OAuth 2.0 con acceso offline de la cuenta del estudio; scopes `calendar.events` y `calendar.freebusy`). Sin ellas `agendar_reunion` guarda una reunión `REQUESTED` y el equipo la confirma por email |
 
 ## Puertos del workspace
 
@@ -83,7 +88,7 @@ Esquema en `prisma/schema.prisma`; migración `20261002202732_phase2_domain_mode
 - **Galería:** `CaseImage` (url, orden) compartida por ambos idiomas; solo el `alt` se traduce, como JSON `{ "ES": "...", "EN": "..." }` (textos cortos que nunca se filtran: no justifican otra tabla).
 - **Tecnologías:** nombre (no se traduce), slug, `category` como enum (`FRONTEND`, `BACKEND`, `DATABASE`, `MOBILE`, `CLOUD`, `AI`, `OTHER`; los frontends traducen la etiqueta), `isFeatured` (marquee de la Home), orden y `TechnologyTranslation` con una descripción opcional por idioma.
 - **Servicios** y **blog:** con traducciones (los servicios con slug por idioma como ancla en `/servicios`; el blog en Markdown).
-- **Leads:** origen `CHAT_IA | FORM`, estado `NEW | CONTACTED | PROPOSAL | WON | LOST`, `locale` y `conversationId` sin FK (la relación llega en la Fase 4).
+- **Leads:** origen `CHAT_IA | FORM`, estado `NEW | CONTACTED | PROPOSAL | WON | LOST`, `locale` y `conversationId` (FK a `Conversation` desde la Fase 4; solo en los leads del chat).
 - **PageView:** agregado por día (`date`, `path`, `locale`, `count`, único por los tres). Registrar una visita es un upsert atómico `count + 1`; el KPI "Visitas" suma pocas filas, la tabla no crece por visita y no guarda datos personales. No permite contar visitantes únicos.
 - **SiteSettings:** fila única con id `default`: email, WhatsApp, `socialLinks`, `businessHours` (`{ "mon": [{ "start": "08:00", "end": "19:00" }], ..., "sun": [] }`), `timezone` `America/Lima` y `meetingDurationMinutes` 30.
 - La extensión `vector` la crea la migración inicial y no se declara en el esquema.
@@ -146,6 +151,27 @@ Contrato completo para front-mwp y admin-mwp en **[docs/API.md](docs/API.md)**: 
 - El almacenamiento está detrás de `FileStorage` (`src/modules/uploads/storage/`). Hoy solo existe `LocalFileStorage`; para S3 se añade otra implementación.
 - **Despliegue (QA):** el redespliegue de `docs/DEPLOY-QA.md` borra todo `/srv/mwp/api` salvo `node_modules`, así que `UPLOADS_DIR` debe apuntar **fuera** del código (p. ej. `/srv/mwp/uploads`, propiedad de `mwp`, y permitido en `ReadWritePaths` si el servicio usa `ProtectSystem`). Hay que fijar también `PUBLIC_UPLOADS_URL=https://api.miwebprofesional.com/uploads` y comprobar que el vhost reenvía `/uploads` a la API.
 
+## Asistente IA (Fase 4)
+
+Contrato completo (SSE incluido) en la **sección 10 de [docs/API.md](docs/API.md)**. Resumen:
+
+- **Chat** `POST /api/v1/assistant/chat` (público, SSE) con **Claude Sonnet 5.5** (`AssistantSettings.model`), esfuerzo `low` por defecto, sin `temperature`, *prompt caching* (tools → system → mensajes) y *fallback* de rechazos en el servidor (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`). Usa el SDK oficial `@anthropic-ai/sdk` (`client.beta.messages.stream`) detrás de `MODEL_CLIENT` (`src/modules/assistant/model-client.ts`).
+- **Tools** (`strict: true`, `eager_input_streaming` y validación con zod antes de ejecutar): `buscar_casos`, `crear_lead` (un lead por conversación, origen `CHAT_IA`) y `agendar_reunion` (horario de `SiteSettings`; Google Calendar con `fetch`, sin `googleapis`, detrás de `CalendarProvider`).
+- **Base de conocimiento** (`src/modules/knowledge`): fragmentos por idioma de los casos publicados con `includeInKnowledgeBase` (sin el cliente si está anonimizado) y de las FAQ publicadas, con embeddings de Voyage (`EmbeddingsProvider`; `input_type` `document` al indexar y `query` al buscar) en `knowledge_chunks` (pgvector, índice HNSW coseno). Se sincroniza sola al editar, publicar, despublicar o borrar un caso o una FAQ (en segundo plano, sin hacer fallar la petición del admin); un fragmento sin cambios conserva su embedding.
+- **Después del seed** hay que indexar una vez: `POST /api/v1/admin/knowledge/reindex` ("Reindexar ahora" en el admin). El seed no llama a Voyage.
+- **Umbral de similitud** (`KNOWLEDGE_MIN_SIMILARITY = 0.5`): medido con preguntas reales sobre el contenido del seed. Con las consultas que escribe el modelo, las relevantes dieron 0,53–0,73 y las ajenas (relojes inteligentes, lavadoras, coches usados, el clima, videojuegos, criptomonedas) 0,33–0,50. Revísalo cuando crezca la base de conocimiento: la similitud de cada búsqueda queda en `toolCalls` de cada mensaje.
+- **Módulos:** `assistant` (chat, motor, tools y endpoints de admin), `assistant-settings`, `conversations`, `knowledge`, `faqs`, `calendar`, `leads` (por ahora solo los leads del chat) y `stats` (`/admin/stats/overview`).
+- **Modelo de datos** (migración `20261125022717_phase4_assistant`): `FaqDocument` + `FaqDocumentTranslation`, `KnowledgeChunk` (`embedding vector(1024)`), `IndexingRun`, `Conversation`, `Message`, `Meeting`, `AssistantSettings` (fila única `default`, la crea el seed) y la FK `Lead.conversationId` → `Conversation`. El seed crea también 3 FAQ genéricas (soporte, plazos y pagos, sin precios) para revisar en el admin.
+- **Índice HNSW y `prisma migrate dev`:** Prisma no sabe declarar índices HNSW, así que `knowledge_chunks_embedding_hnsw_idx` se crea en el SQL de la migración. Por eso `migrate dev` lo ve como *drift* y propone borrarlo: **en cada migración nueva generada con `--create-only`, elimina la línea `DROP INDEX "knowledge_chunks_embedding_hnsw_idx"`** antes de aplicarla. Un test e2e comprueba que el índice existe.
+- **Límites:** 10 mensajes/min por IP y por `visitorId` (`@nestjs/throttler`, en memoria) y `maxMessagesPerSession` mensajes por conversación. Detrás de Apache todas las IPs son `127.0.0.1` hasta configurar `trust proxy` (Fase 7), así que hoy el límite efectivo por visitante es el del `visitorId`.
+- **Prueba real:** con la API levantada y las claves reales, reindexa y pregunta por SSE:
+
+  ```bash
+  curl -N -X POST http://localhost:3001/api/v1/assistant/chat \
+    -H "Content-Type: application/json" \
+    -d '{"visitorId":"prueba-123456","locale":"es","message":"¿Tienen experiencia con sistemas para contadores?"}'
+  ```
+
 ## Auth API
 
 Todas las rutas están bajo `/api/v1`. Un `JwtAuthGuard` global protege **todas** las rutas salvo las marcadas con `@Public()` (health, login, refresh y logout); `@Roles('ADMIN')` restringe por rol (403 si no se cumple). Los errores siguen el formato común `{ statusCode, error, message, path, timestamp }`.
@@ -179,6 +205,7 @@ Comportamiento a tener en cuenta en los clientes:
 
 - **Unitarios** (`npm test`): `*.spec.ts` junto al código, con dependencias simuladas.
 - **E2E** (`npm run test:e2e`): `test/*.e2e-spec.ts` con la configuración global de `main.ts`. El `globalSetup` (`test/global-setup.ts`) crea la base `mwp_test` en el mismo contenedor (si no existe) y aplica las migraciones con `prisma migrate deploy`; cada test vacía las tablas (`TRUNCATE`). Los archivos se ejecutan en serie. Necesita la base de datos levantada (`npm run db:up`). Las subidas de los e2e van a una carpeta temporal del sistema (`<tmp>/mwp-e2e-uploads`), nunca a `./uploads`. El webhook de revalidación está desactivado salvo en `test/revalidation.e2e-spec.ts`, que lo dirige a un servidor HTTP local.
+- **Asistente:** los tests nunca llaman a Claude, Voyage ni Google. `test/assistant.e2e-spec.ts` sustituye `MODEL_CLIENT` y `EMBEDDINGS_PROVIDER` por `test/utils/fake-model-client.ts` (respuestas guionizadas) y `test/utils/fake-embeddings.ts` (bolsa de palabras determinista) con `overrideProvider` de Nest, y los unitarios simulan `fetch` para Voyage y Google Calendar.
 
 ## Convenciones
 

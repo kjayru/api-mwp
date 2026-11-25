@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import type { RevalidationService } from '../../common/revalidation/revalidation.service.js';
 import type { PrismaService } from '../../prisma/prisma.service.js';
+import type { KnowledgeSyncService } from '../knowledge/knowledge-sync.service.js';
 import {
   AdminCasesService,
   IMAGE_NOT_FOUND,
@@ -105,6 +106,7 @@ describe('AdminCasesService', () => {
     $transaction: vi.fn(),
   };
   const revalidation = { revalidate: vi.fn() };
+  const knowledge = { scheduleCase: vi.fn() };
   let service: AdminCasesService;
 
   /** Tags sent in the last revalidation call. */
@@ -125,6 +127,7 @@ describe('AdminCasesService', () => {
     service = new AdminCasesService(
       prisma as unknown as PrismaService,
       revalidation as unknown as RevalidationService,
+      knowledge as unknown as KnowledgeSyncService,
     );
   });
 
@@ -436,6 +439,7 @@ describe('AdminCasesService', () => {
         details: { locale: 'EN', missing: ['summary', 'blocks'] },
       });
       expect(prisma.caseTranslation.update).not.toHaveBeenCalled();
+      expect(knowledge.scheduleCase).not.toHaveBeenCalled();
     });
 
     it('returns 422 with every field when the locale does not exist', async () => {
@@ -461,6 +465,8 @@ describe('AdminCasesService', () => {
         'case:cortemaestro',
         'case:cortemaestro-en',
       ]);
+      // Indexes the case for the assistant (fire-and-forget).
+      expect(knowledge.scheduleCase).toHaveBeenCalledWith('case-1');
     });
 
     it('keeps the original publishedAt when republishing', async () => {
@@ -484,6 +490,7 @@ describe('AdminCasesService', () => {
         data: { status: 'DRAFT' },
       });
       expect(revalidation.revalidate).toHaveBeenCalled();
+      expect(knowledge.scheduleCase).toHaveBeenCalledWith('case-1');
     });
 
     it('returns 404 when the locale does not exist', async () => {
@@ -504,6 +511,7 @@ describe('AdminCasesService', () => {
         data: { deletedAt: expect.any(Date) },
       });
       expect(lastTags()).toContain('case:cortemaestro');
+      expect(knowledge.scheduleCase).toHaveBeenCalledWith('case-1');
     });
   });
 

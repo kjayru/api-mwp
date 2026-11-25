@@ -6,6 +6,9 @@
 //   technology slug or name, ES translation slug). Existing rows, edited or
 //   soft-deleted from the admin, are never touched, so the seed is safe to re-run
 //   on QA.
+// - AssistantSettings: created once with the defaults; later runs keep the admin's edits.
+// - FAQs: create-only (natural key: ES question). The seed does not index the
+//   knowledge base: run POST /api/v1/admin/knowledge/reindex afterwards.
 // - Blog posts come from Markdown files in prisma/seed-content/blog/ (format in
 //   prisma/blog-content.ts). They are validated before anything is written.
 //
@@ -15,11 +18,20 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import type { Locale, Prisma } from '../src/generated/prisma/client.js';
 import { fileURLToPath } from 'node:url';
+import {
+  ASSISTANT_TOOLS,
+  DEFAULT_ASSISTANT_EFFORT,
+  DEFAULT_ASSISTANT_INSTRUCTIONS,
+  DEFAULT_ASSISTANT_MODEL,
+  DEFAULT_MAX_MESSAGES_PER_SESSION,
+} from '../src/modules/assistant-settings/assistant-settings.constants.js';
 import { hashPassword } from '../src/modules/auth/scrypt.js';
 import { loadBlogContent, seedBlogPosts } from './blog-content.js';
 import {
   type CaseSeed,
   cases,
+  type FaqSeed,
+  faqs,
   type ServiceSeed,
   services,
   siteSettings,
@@ -114,6 +126,49 @@ async function seedSiteSettings(prisma: PrismaClient) {
     update: {},
   });
   console.log('  site settings: ok');
+}
+
+async function seedAssistantSettings(prisma: PrismaClient) {
+  await prisma.assistantSettings.upsert({
+    where: { id: 'default' },
+    create: {
+      id: 'default',
+      model: DEFAULT_ASSISTANT_MODEL,
+      effort: DEFAULT_ASSISTANT_EFFORT,
+      instructions: DEFAULT_ASSISTANT_INSTRUCTIONS,
+      enabledTools: [...ASSISTANT_TOOLS],
+      maxMessagesPerSession: DEFAULT_MAX_MESSAGES_PER_SESSION,
+    },
+    update: {},
+  });
+  console.log('  assistant settings: ok');
+}
+
+/** Create-only: returns false when a FAQ with the same ES question exists (even deleted). */
+async function seedFaq(
+  prisma: PrismaClient,
+  faq: FaqSeed,
+  sortOrder: number,
+): Promise<boolean> {
+  const existing = await prisma.faqDocumentTranslation.findFirst({
+    where: { locale: 'ES', question: faq.translations.ES.question },
+    select: { id: true },
+  });
+  if (existing) return false;
+  await prisma.faqDocument.create({
+    data: {
+      sortOrder,
+      translations: {
+        create: LOCALES.map((locale) => ({
+          locale,
+          ...faq.translations[locale],
+          status: 'PUBLISHED' as const,
+          publishedAt: new Date(),
+        })),
+      },
+    },
+  });
+  return true;
 }
 
 async function seedTechnologies(
@@ -272,6 +327,7 @@ async function main() {
     const blog = await loadBlogPosts(prisma);
     const adminId = await seedAdmin(prisma);
     await seedSiteSettings(prisma);
+    await seedAssistantSettings(prisma);
     const techIds = await seedTechnologies(prisma);
     let created = 0;
     for (const [index, service] of services.entries()) {
@@ -285,6 +341,11 @@ async function main() {
       if (await seedCase(prisma, item, index + 1, techIds)) created++;
     }
     console.log(`  cases: ${created} created, ${cases.length - created} kept`);
+    created = 0;
+    for (const [index, faq] of faqs.entries()) {
+      if (await seedFaq(prisma, faq, index + 1)) created++;
+    }
+    console.log(`  faqs: ${created} created, ${faqs.length - created} kept`);
     if (blog && blog.ignored.length > 0) {
       console.log(`  blog posts: ignored files: ${blog.ignored.join(', ')}`);
     }
@@ -304,6 +365,9 @@ async function main() {
       );
     }
     console.log('Seed finished.');
+    console.log(
+      '  Knowledge base: not indexed by the seed. With the API running, call POST /api/v1/admin/knowledge/reindex (or "Reindexar ahora" in the admin).',
+    );
   } finally {
     await prisma.$disconnect();
   }
