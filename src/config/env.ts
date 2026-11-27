@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import { z } from 'zod';
 
 const MIN_REVALIDATE_SECRET_LENGTH = 32;
+const MIN_PREVIEW_SECRET_LENGTH = 32;
 /** Chosen by testing real questions against the seeded content (see README). */
 export const DEFAULT_KNOWLEDGE_MIN_SIMILARITY = 0.5;
 
@@ -188,6 +189,27 @@ const envSchema = z
       z
         .url({ protocol: /^https?$/ })
         .default('http://localhost:3002')
+        .transform((value) => value.replace(/\/+$/, '')),
+    ),
+    // --- Draft preview (Phase 6) ---
+    // Shared with front-mwp (server side only): signs the preview tokens and is
+    // sent as x-preview-secret. Without it the preview endpoints answer 503.
+    PREVIEW_SECRET: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        .min(
+          MIN_PREVIEW_SECRET_LENGTH,
+          `PREVIEW_SECRET must be at least ${MIN_PREVIEW_SECRET_LENGTH} characters`,
+        )
+        .optional(),
+    ),
+    // Public origin of the site, for the preview URL (<FRONT_URL>/api/draft?token=...).
+    FRONT_URL: z.preprocess(
+      emptyToUndefined,
+      z
+        .url({ protocol: /^https?$/ })
+        .default('http://localhost:3000')
         .transform((value) => value.replace(/\/+$/, '')),
     ),
   })

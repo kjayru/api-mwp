@@ -117,6 +117,28 @@ describe('CasesService', () => {
       ]);
     });
 
+    it('includeDrafts drops the status condition but keeps deleted cases out and neighbours published', async () => {
+      caseTranslation.findFirst.mockResolvedValue(detailRow({ slug: 'borrador' }));
+
+      const detail = await service.findBySlug('es', 'borrador', {
+        includeDrafts: true,
+      });
+
+      expect(caseTranslation.findFirst.mock.calls[0][0].where).toEqual({
+        locale: 'ES',
+        case: { deletedAt: null },
+        slug: 'borrador',
+      });
+      // The neighbour list is still the published one.
+      expect(caseTranslation.findMany.mock.calls[0][0].where).toEqual({
+        locale: 'ES',
+        status: 'PUBLISHED',
+        case: { deletedAt: null },
+      });
+      // A draft is not in the published list, so it has no "next".
+      expect(detail.next).toBeNull();
+    });
+
     it('returns 404 when the slug is not published in that locale', async () => {
       caseTranslation.findFirst.mockResolvedValue(null);
 

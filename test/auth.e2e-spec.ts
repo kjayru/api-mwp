@@ -193,6 +193,54 @@ describe('Auth (e2e, real database)', () => {
       expect(res.headers['retry-after']).toEqual(expect.any(String));
     });
 
+    it('limits POST /auth/refresh to 30 per minute per IP, with its own counter', async () => {
+      const refresh = (ip: string) =>
+        http()
+          .post('/api/v1/auth/refresh')
+          .set('X-Forwarded-For', ip)
+          .send({ refreshToken: 'unknown' });
+      for (let i = 0; i < 30; i++) {
+        await refresh('203.0.113.10').expect(401);
+      }
+      const res = await refresh('203.0.113.10').expect(429);
+      expect(res.body).toMatchObject({
+        statusCode: 429,
+        error: 'Too Many Requests',
+        message: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.',
+        path: '/api/v1/auth/refresh',
+      });
+      expect(res.headers['retry-after']).toEqual(expect.any(String));
+
+      // Another visitor and the login route are unaffected.
+      await refresh('203.0.113.11').expect(401);
+      await login(ADMIN.email, 'wrong').expect(401);
+    });
+
+    it('limits POST /auth/password to 5 per minute per IP', async () => {
+      const session = (await login(ADMIN.email, ADMIN.password).expect(200)).body;
+      const change = (ip: string) =>
+        http()
+          .post('/api/v1/auth/password')
+          .set('Authorization', `Bearer ${session.accessToken}`)
+          .set('X-Forwarded-For', ip)
+          .send({
+            currentPassword: 'not-the-password',
+            newPassword: 'a-brand-new-password-1',
+          });
+      for (let i = 0; i < 5; i++) {
+        await change('203.0.113.20').expect(400);
+      }
+      const res = await change('203.0.113.20').expect(429);
+      expect(res.body).toMatchObject({
+        statusCode: 429,
+        message: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.',
+        path: '/api/v1/auth/password',
+      });
+      await change('203.0.113.21').expect(400);
+      // Unauthenticated calls still fail on auth first.
+      await http().post('/api/v1/auth/password').send({}).expect(401);
+    });
+
     it('does not rate limit the other auth routes', async () => {
       for (let i = 0; i < 7; i++) {
         await http()

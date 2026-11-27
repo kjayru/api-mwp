@@ -9,5 +9,18 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.spec.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/modules/**/*.service.ts', 'src/common/**/*.ts'],
+      exclude: [
+        '**/*.spec.ts',
+        '**/dto/**',
+        '**/entities/**',
+        '**/*.module.ts',
+        'src/generated/**',
+      ],
+      reporter: ['text-summary', 'html'],
+      thresholds: { lines: 80, statements: 80, functions: 80, branches: 70 },
+    },
   },
 });

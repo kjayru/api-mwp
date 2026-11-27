@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import helmet from 'helmet';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { AppValidationPipe } from './common/validation/app-validation.pipe.js';
 import type { Env } from './config/env.js';
@@ -18,6 +19,11 @@ export function setupApp(app: NestExpressApplication): void {
   // req.ip is the visitor's IP (from X-Forwarded-For) only when the request
   // comes from a trusted proxy; every per-IP rate limit relies on it.
   app.set('trust proxy', config.get('TRUST_PROXY', { infer: true }));
+  // Security headers with helmet's defaults (JSON API: no HTML to protect, but
+  // nosniff, HSTS, frame and referrer rules are free). Registered first so every
+  // response gets them; /uploads overrides Cross-Origin-Resource-Policy (see
+  // serveUploads) so the public site can load images from another origin.
+  app.use(helmet());
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.enableCors({

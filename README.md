@@ -55,6 +55,8 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | no (las cinco o ninguna) | — | Cuenta SMTP que avisa por email a `SiteSettings.contactEmail` de cada lead nuevo (docs/API.md 11.2). Alternativa a Brevo. Sin proveedor solo se registra en el log |
 | `SMTP_SECURE` | no | `true` en el puerto 465 | TLS implícito (`true`/`false`); si no, STARTTLS |
 | `ADMIN_URL` | no | `http://localhost:3002` | URL de admin-mwp para el enlace del email (`<ADMIN_URL>/leads/<id>`) |
+| `PREVIEW_SECRET` | no | — | Mínimo 32 caracteres. Secreto compartido con front-mwp (solo servidor): firma los tokens de vista previa de borradores y viaja en `x-preview-secret`. Sin él, los endpoints de vista previa responden 503 `preview_disabled` (docs/API.md 12.1) |
+| `FRONT_URL` | no | `http://localhost:3000` | Origen público del sitio; la vista previa devuelve `<FRONT_URL>/api/draft?token=...` |
 
 ## Puertos del workspace
 
@@ -187,10 +189,10 @@ Todas las rutas están bajo `/api/v1`. Un `JwtAuthGuard` global protege **todas*
 | Método y ruta | Auth | Cuerpo | Respuesta |
 |---|---|---|---|
 | `POST /auth/login` | pública, **5 req/min por IP** | `{ "email": string, "password": string }` | **200** `AuthResponse` · **401** `"Credenciales inválidas"` (contraseña incorrecta, email desconocido o usuario inactivo) · **400** cuerpo inválido · **429** demasiados intentos (cabecera `Retry-After`) |
-| `POST /auth/refresh` | pública | `{ "refreshToken": string }` | **200** `AuthResponse` (rota el refresh token) · **401** token desconocido, expirado o ya usado · **400** |
+| `POST /auth/refresh` | pública, **30 req/min por IP** | `{ "refreshToken": string }` | **200** `AuthResponse` (rota el refresh token) · **401** token desconocido, expirado o ya usado · **400** · **429** |
 | `POST /auth/logout` | pública | `{ "refreshToken": string }` | **204** sin cuerpo, siempre (idempotente, también para tokens desconocidos) · **400** |
 | `GET /auth/me` | `Authorization: Bearer <accessToken>` | — | **200** `{ id, email, name, role }` · **401** |
-| `POST /auth/password` | `Authorization: Bearer <accessToken>` | `{ "currentPassword": string, "newPassword": string }` (12–128) | **204** y revoca las demás sesiones · **400** `invalid_password` / `same_password` (en `details.reason`) o cuerpo inválido · **401** (docs/API.md 11.6) |
+| `POST /auth/password` | `Authorization: Bearer <accessToken>`, **5 req/min por IP** | `{ "currentPassword": string, "newPassword": string }` (12–128) | **204** y revoca las demás sesiones · **400** `invalid_password` / `same_password` (en `details.reason`) o cuerpo inválido · **401** · **429** (docs/API.md 11.6) |
 
 ```jsonc
 // AuthResponse
@@ -208,7 +210,13 @@ Comportamiento a tener en cuenta en los clientes:
 - **Rotación:** cada `refresh` revoca el token presentado y devuelve uno nuevo; guarda siempre el último.
 - **Reutilización = robo:** presentar un refresh token ya revocado (por rotación o logout) revoca **todas** las sesiones activas del usuario y responde 401. Dos refresh simultáneos con el mismo token cuentan como reutilización: serializa los refresh en el cliente (una sola petición en vuelo).
 - El email no distingue mayúsculas. Las contraseñas se guardan con scrypt (`scrypt$N$r$p$salt$hash`, `node:crypto`); el refresh token solo como sha256.
-- El límite de login se guarda en memoria (por instancia) y usa `req.ip`, que detrás de Apache es la IP del visitante gracias a `TRUST_PROXY` (por defecto `loopback`).
+- Los límites de login (5/min), refresh (30/min) y cambio de contraseña (5/min) son por IP y por ruta (cada ruta tiene su contador). No hay throttler global: los fetch del front en servidor salen todos de 127.0.0.1 y se limitarían entre sí. Se guardan en memoria (por instancia) y usa `req.ip`, que detrás de Apache es la IP del visitante gracias a `TRUST_PROXY` (por defecto `loopback`).
+
+## Seguridad HTTP
+
+- `helmet` con sus valores por defecto (`src/setup-app.ts`): `X-Content-Type-Options`, HSTS, `X-Frame-Options`, `Referrer-Policy`, CSP restrictiva, etc. en todas las respuestas, errores incluidos.
+- `/uploads` conserva sus cabeceras propias, en particular `Cross-Origin-Resource-Policy: cross-origin` (helmet pondría `same-origin` y el sitio público, en otro origen, no podría cargar las imágenes).
+- El chat SSE y CORS no se ven afectados (cubierto por los e2e).
 
 ## Tests
 

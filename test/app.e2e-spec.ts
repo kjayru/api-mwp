@@ -66,6 +66,48 @@ describe('API (e2e)', () => {
     expect(res.body.timestamp).toEqual(expect.any(String));
   });
 
+  it('sends helmet security headers on API routes', async () => {
+    queryRaw.mockResolvedValueOnce([{ pgvector: true }]);
+    const res = await request(app.getHttpServer()).get('/api/v1/health');
+
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['strict-transport-security']).toMatch(/max-age=\d+/);
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
+    expect(res.headers['content-security-policy']).toContain(
+      "default-src 'self'",
+    );
+    expect(res.headers['x-powered-by']).toBeUndefined();
+    // Errors carry them too.
+    const missing = await request(app.getHttpServer())
+      .get('/api/v1/does-not-exist')
+      .expect(404);
+    expect(missing.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('keeps CORS preflights working with credentials next to helmet', async () => {
+    const res = await request(app.getHttpServer())
+      .options('/api/v1/admin/cases')
+      .set('Origin', 'http://localhost:3002')
+      .set('Access-Control-Request-Method', 'GET')
+      .set('Access-Control-Request-Headers', 'authorization');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe(
+      'http://localhost:3002',
+    );
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.headers['access-control-allow-headers']).toMatch(
+      /authorization/i,
+    );
+    // Not an allowed origin: no CORS headers.
+    const other = await request(app.getHttpServer())
+      .options('/api/v1/admin/cases')
+      .set('Origin', 'https://evil.example')
+      .set('Access-Control-Request-Method', 'GET');
+    expect(other.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
   it('allows CORS from front-mwp', async () => {
     const res = await request(app.getHttpServer())
       .get('/api/v1/health')

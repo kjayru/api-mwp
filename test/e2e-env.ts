@@ -45,4 +45,7 @@ export const e2eEnv = {
   // reCAPTCHA off; recaptcha.e2e-spec.ts injects a fake RecaptchaService.
   RECAPTCHA_SECRET_KEY: '',
   ADMIN_URL: 'http://localhost:3002',
+  // Fake values; preview.e2e-spec.ts also boots an app without the secret.
+  PREVIEW_SECRET: 'e2e-preview-secret-e2e-preview-secret-01',
+  FRONT_URL: 'https://front.example.test',
 };

@@ -4,6 +4,28 @@ const DATABASE_URL = 'postgresql://mwp:mwp@localhost:5433/mwp?schema=public';
 const JWT_SECRET = 'a'.repeat(32);
 const required = { DATABASE_URL, JWT_SECRET };
 
+describe('draft preview env', () => {
+  it('is optional and FRONT_URL defaults to the local site', () => {
+    const env = validateEnv(required);
+    expect(env.PREVIEW_SECRET).toBeUndefined();
+    expect(env.FRONT_URL).toBe('http://localhost:3000');
+    expect(validateEnv({ ...required, PREVIEW_SECRET: '' }).PREVIEW_SECRET).toBeUndefined();
+  });
+
+  it('requires 32 characters when set and trims the trailing slash of FRONT_URL', () => {
+    expect(() => validateEnv({ ...required, PREVIEW_SECRET: 'short' })).toThrow(
+      /PREVIEW_SECRET/,
+    );
+    const env = validateEnv({
+      ...required,
+      PREVIEW_SECRET: 'p'.repeat(32),
+      FRONT_URL: 'https://miwebprofesional.com/',
+    });
+    expect(env.PREVIEW_SECRET).toHaveLength(32);
+    expect(env.FRONT_URL).toBe('https://miwebprofesional.com');
+  });
+});
+
 describe('validateEnv', () => {
   it('applies defaults', () => {
     const env = validateEnv(required);

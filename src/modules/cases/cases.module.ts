@@ -7,5 +7,6 @@ import { CasesService } from './cases.service.js';
 @Module({
   controllers: [CasesController, AdminCasesController],
   providers: [CasesService, AdminCasesService],
+  exports: [CasesService],
 })
 export class CasesModule {}

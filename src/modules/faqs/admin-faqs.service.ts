@@ -6,6 +6,7 @@ import {
 import { LOCALES, type PerLocale } from '../../common/i18n/locale.js';
 import type { Paginated } from '../../common/pagination/pagination.js';
 import { incompleteForPublication, isBlank } from '../../common/publication.js';
+import { assertIsPermutation } from '../../common/reorder.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type {
   Locale,
@@ -250,6 +251,31 @@ export class AdminFaqsService {
     ]);
     this.knowledge.scheduleFaq(id);
     return this.findOne(id);
+  }
+
+  /**
+   * Sets sortOrder to the position (1..n) in `ids`, which must hold every
+   * non-deleted FAQ once. The order does not change what the assistant
+   * answers, so nothing is reindexed.
+   */
+  async reorder(ids: string[]): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.faqDocument.findMany({
+        where: { deletedAt: null },
+        select: { id: true },
+      });
+      assertIsPermutation(
+        ids,
+        existing.map((row) => row.id),
+      );
+      for (const [index, id] of ids.entries()) {
+        // Only rows whose position changes are written.
+        await tx.faqDocument.updateMany({
+          where: { id, NOT: { sortOrder: index + 1 } },
+          data: { sortOrder: index + 1 },
+        });
+      }
+    });
   }
 
   async remove(id: string): Promise<void> {

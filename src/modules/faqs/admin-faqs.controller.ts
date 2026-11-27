@@ -8,11 +8,13 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { LocaleBodyDto } from '../../common/i18n/locale.js';
 import type { Paginated } from '../../common/pagination/pagination.js';
+import { ReorderDto } from '../../common/reorder.js';
 import { type AdminFaq, AdminFaqsService } from './admin-faqs.service.js';
 import { AdminFaqsQueryDto, CreateFaqDto, UpdateFaqDto } from './dto/faq.dto.js';
 
@@ -24,6 +26,12 @@ export class AdminFaqsController {
   @Get()
   list(@Query() query: AdminFaqsQueryDto): Promise<Paginated<AdminFaq>> {
     return this.faqs.list(query);
+  }
+
+  @Put('order')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  reorder(@Body() dto: ReorderDto): Promise<void> {
+    return this.faqs.reorder(dto.ids);
   }
 
   @Get(':id')

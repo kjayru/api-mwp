@@ -6,6 +6,7 @@ import { CalendarModule } from '../calendar/calendar.module.js';
 import { ConversationsModule } from '../conversations/conversations.module.js';
 import { LeadsModule } from '../leads/leads.module.js';
 import { AdminAssistantController } from './admin-assistant.controller.js';
+import { AssistantUsageService } from './assistant-usage.service.js';
 import { AssistantEngineService } from './assistant-engine.service.js';
 import { AssistantController } from './assistant.controller.js';
 import { AssistantService } from './assistant.service.js';
@@ -31,6 +32,7 @@ import { AssistantToolsService } from './tools/assistant-tools.service.js';
     AssistantEngineService,
     AssistantToolsService,
     AssistantService,
+    AssistantUsageService,
   ],
 })
 export class AssistantModule {}

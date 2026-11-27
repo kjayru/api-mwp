@@ -61,6 +61,10 @@ describe('Uploads (e2e)', () => {
       'public, max-age=31536000, immutable',
     );
     expect(Buffer.compare(served.body as Buffer, TINY_PNG)).toBe(0);
+    // helmet's same-origin default must not reach /uploads: the public site on
+    // another origin has to be able to embed the images.
+    expect(served.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect(served.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
   it('rejects a text file renamed .png', async () => {

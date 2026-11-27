@@ -8,5 +8,6 @@ import { BlogService } from './blog.service.js';
 @Module({
   controllers: [BlogController, AdminBlogController],
   providers: [BlogService, AdminBlogService],
+  exports: [BlogService],
 })
 export class BlogModule {}

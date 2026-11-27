@@ -1,18 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import type { LeadSource, LeadStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import {
-  formatLocalDateTime,
-  isValidTimeZone,
-  zonedParts,
-  zonedTimeToUtc,
-} from '../calendar/time-zones.js';
+import { formatLocalDateTime } from '../calendar/time-zones.js';
+import { dayRange, siteTimeZone } from './day-range.js';
 
 export const DEFAULT_OVERVIEW_DAYS = 30;
 const TOP_QUESTIONS = 5;
 const LATEST_LEADS = 5;
 const TOP_PAGES = 5;
-const DEFAULT_TIME_ZONE = 'America/Lima';
 
 export interface StatsOverview {
   range: { days: number; from: string; to: string; timeZone: string };
@@ -79,27 +74,11 @@ export class AdminStatsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async overview(days: number, now: Date = new Date()): Promise<StatsOverview> {
-    const settings = await this.prisma.siteSettings.findUnique({
-      where: { id: 'default' },
-      select: { timezone: true },
-    });
-    const timeZone =
-      settings?.timezone && isValidTimeZone(settings.timezone)
-        ? settings.timezone
-        : DEFAULT_TIME_ZONE;
-
-    const today = zonedParts(now, timeZone);
-    const dates: string[] = [];
-    for (let offset = days - 1; offset >= 0; offset--) {
-      const day = new Date(Date.UTC(today.year, today.month - 1, today.day - offset));
-      dates.push(day.toISOString().slice(0, 10));
-    }
-    const [fromYear, fromMonth, fromDay] = dates[0].split('-').map(Number);
-    const fromUtc =
-      zonedTimeToUtc(
-        { year: fromYear, month: fromMonth, day: fromDay, hour: 0, minute: 0 },
-        timeZone,
-      ) ?? new Date(Date.UTC(fromYear, fromMonth - 1, fromDay));
+    const { timeZone, dates, fromUtc } = dayRange(
+      days,
+      now,
+      await siteTimeZone(this.prisma),
+    );
 
     // PageView.date is the local day stored as UTC midnight (DATE column).
     const visitsWhere = {

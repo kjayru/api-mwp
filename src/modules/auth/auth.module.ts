@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { ExecutionContext, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
@@ -11,7 +11,6 @@ import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 
 export const LOGIN_THROTTLE = { ttl: 60_000, limit: 5 } as const;
-
 @Module({
   imports: [
     UsersModule,
@@ -31,11 +30,16 @@ export const LOGIN_THROTTLE = { ttl: 60_000, limit: 5 } as const;
     // X-RateLimit-*; a named throttler would suffix them (Retry-After-login).
     ThrottlerModule.forRoot({
       throttlers: [{ ...LOGIN_THROTTLE }],
-      errorMessage:
-        'Demasiados intentos de inicio de sesión. Inténtalo de nuevo en un minuto.',
+      // Login keeps its own wording; refresh and password get a generic one.
+      errorMessage: (context: ExecutionContext) =>
+        context.getHandler().name === 'login'
+          ? 'Demasiados intentos de inicio de sesión. Inténtalo de nuevo en un minuto.'
+          : 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.',
     }),
   ],
   controllers: [AuthController],
+  // JwtService is reused (with another secret per call) by the draft preview.
+  exports: [JwtModule],
   providers: [
     AuthService,
     // Order matters: authenticate first, then check roles.

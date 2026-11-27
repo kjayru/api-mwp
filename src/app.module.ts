@@ -12,6 +12,7 @@ import { ConversationsModule } from './modules/conversations/conversations.modul
 import { FaqsModule } from './modules/faqs/faqs.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { LeadsModule } from './modules/leads/leads.module.js';
+import { PreviewModule } from './modules/preview/preview.module.js';
 import { SearchModule } from './modules/search/search.module.js';
 import { ServicesModule } from './modules/services/services.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
@@ -50,6 +51,8 @@ import { PrismaModule } from './prisma/prisma.module.js';
     AnalyticsModule,
     SettingsModule,
     SearchModule,
+    // Phase 6: draft preview.
+    PreviewModule,
     // Distributed tracing, logs and metrics: https://observe.nestjs.com
     ...(observeEnabled
       ? [

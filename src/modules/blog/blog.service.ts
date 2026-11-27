@@ -113,13 +113,24 @@ export class BlogService {
     return { data: rows.map(toListItem), meta: { page, limit, total } };
   }
 
+  /**
+   * Detail of a post. `includeDrafts` (draft preview only) also finds
+   * translations that are not published; everything computed (neighbours,
+   * alternates) still follows the public rules.
+   */
   async findBySlug(
     publicLocale: PublicLocale,
     slug: string,
+    options: { includeDrafts?: boolean } = {},
   ): Promise<PublicBlogPostDetail> {
     const locale = toDbLocale(publicLocale);
     const row = await this.prisma.blogPostTranslation.findFirst({
-      where: { ...publishedIn(locale), slug },
+      where: {
+        ...(options.includeDrafts
+          ? { locale, blogPost: { deletedAt: null } }
+          : publishedIn(locale)),
+        slug,
+      },
       select: {
         ...LIST_SELECT,
         seoTitle: true,

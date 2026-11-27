@@ -21,6 +21,7 @@ This is the contract for **front-mwp** (public site) and **admin-mwp** (admin pa
 9. [Blog](#9-blog): `GET /blog`, `GET /blog/:slug` and `/admin/blog`
 10. [Assistant](#10-assistant): `POST /assistant/chat` (SSE), knowledge base, FAQs, conversations, settings and dashboard
 11. [Leads, contact form, visits, settings, users and search](#11-leads-contact-form-visits-settings-users-and-search-phase-5) (Phase 5)
+12. [Draft preview, FAQ order and assistant usage](#12-draft-preview-faq-order-and-assistant-usage-phase-6) (Phase 6)
 
 ---
 
@@ -72,8 +73,8 @@ Every error, from any endpoint, has this shape:
 | 409 | Slug or technology name already in use; user email already in use (`email_taken`, 11.6) |
 | 413 | Upload larger than 5 MB, or a JSON body larger than 1 MB |
 | 422 | Publishing an incomplete translation, or editing a published translation so that it becomes incomplete; user rules `self_change` and `last_admin` (11.6) |
-| 429 | Rate limits: login (README), the assistant chat (section 10) and the contact form (11.1) |
-| 503 | The assistant has no Claude API key (section 10) |
+| 429 | Rate limits: login, refresh and password change (README), the assistant chat (section 10) and the contact form (11.1) |
+| 503 | The assistant has no Claude API key (section 10); the draft preview has no `PREVIEW_SECRET` (12.1) |
 
 ### Auth
 
@@ -661,7 +662,7 @@ x-revalidate-secret: ${REVALIDATE_SECRET}
 
 ## 8. Endpoint summary
 
-Phase 5 endpoints (leads, contact form, page views, settings, users and search) are listed in [section 11.9](#119-summary).
+Phase 5 endpoints (leads, contact form, page views, settings, users and search) are listed in [section 11.9](#119-summary). The Phase 6 endpoints (draft preview, FAQ order, assistant usage) are the last rows of this table and are described in [section 12](#12-draft-preview-faq-order-and-assistant-usage-phase-6).
 
 | Method | Path | Auth | Success |
 |---|---|---|---|
@@ -723,6 +724,12 @@ Phase 5 endpoints (leads, contact form, page views, settings, users and search) 
 | POST | `/admin/faqs/:id/unpublish` | ADMIN, EDITOR | 200 |
 | DELETE | `/admin/faqs/:id` | ADMIN, EDITOR | 204 |
 | GET | `/admin/stats/overview?days` | ADMIN, EDITOR | 200 |
+| PUT | `/admin/faqs/order` | ADMIN, EDITOR | 204 |
+| GET | `/admin/assistant/usage?days` | ADMIN, EDITOR | 200 |
+| POST | `/admin/preview` | ADMIN, EDITOR | 200 `{ url, expiresAt }` |
+| POST | `/preview/resolve` | public + `x-preview-secret` | 200 |
+| GET | `/preview/cases/:slug?locale` | public + `x-preview-secret` | 200 detail |
+| GET | `/preview/blog/:slug?locale` | public + `x-preview-secret` | 200 detail |
 
 ---
 
@@ -1672,3 +1679,92 @@ How the session is identified: since Phase 5 every access token carries a `sid` 
 | POST | `/admin/users/:id/password` | ADMIN | 204 |
 | POST | `/auth/password` | any logged-in user | 204 |
 | GET | `/admin/search?q` | ADMIN, EDITOR | 200 |
+
+---
+
+## 12. Draft preview, FAQ order and assistant usage (Phase 6)
+
+### 12.1 Draft preview
+
+The admin opens a case or post on the public site as it is saved, published or not. The front renders the draft in Next.js draft mode. Only an authenticated admin can start a preview. Every call between the front and the API carries a shared secret.
+
+**Env (API):**
+
+| Var | Default | Notes |
+|---|---|---|
+| `PREVIEW_SECRET` | | At least 32 characters. Shared with the front, which uses it only server side. Without it, every endpoint of 12.1 answers **503** with `details.reason: "preview_disabled"` |
+| `FRONT_URL` | `http://localhost:3000` | Public origin of the site, used to build the preview URL |
+
+The front has `PREVIEW_SECRET` (the same value) and reads it server side only.
+
+**`POST /admin/preview`** (ADMIN, EDITOR), body `{ "type": "case" | "post", "id": "<cuid>", "locale": "es" | "en" }`. It returns **200**:
+
+```json
+{ "url": "https://miwebprofesional.com/api/draft?token=<token>", "expiresAt": "2026-11-27T17:10:00.000Z" }
+```
+
+- The token is a JWT signed with `PREVIEW_SECRET`. It uses HS256, has audience `preview`, expires after **10 minutes**, and carries the payload `{ type, id, locale }`.
+- **404** if the case or post is unknown or deleted.
+- **422** with `details: { reason: "no_slug", locale: "EN" }` when the entity has no translation (or an empty slug) in that locale, so it can't be routed.
+- **400** for an invalid body (`type` is `case` or `post`; `locale` is lowercase `es` or `en`).
+- The token is signed with `PREVIEW_SECRET`, never with `JWT_SECRET`. Neither the token nor the secret is logged.
+
+**`POST /preview/resolve`** (`@Public`, requires the header `x-preview-secret`). The body is `{ "token": "..." }`. It returns **200** `{ "type": "case", "id": "...", "locale": "es", "slug": "contaflow-ia" }`, where `slug` is the current slug of that locale's translation.
+
+- **401** `details.reason: "invalid_secret"` when the header is missing or wrong (compared in constant time).
+- **401** `details.reason: "invalid_token"` when the token is bad, expired, signed with another key or has another audience.
+- Responses carry `Cache-Control: no-store`.
+- **404** when the entity was deleted in the meantime.
+
+**`GET /preview/cases/:slug?locale=es|en`** and **`GET /preview/blog/:slug?locale=es|en`** (`@Public`, header `x-preview-secret`) return the **same shape as the public detail** (`GET /cases/:slug` and `GET /blog/:slug`).
+
+- They find the slug among that locale's translations in **any status** (draft or published), excluding deleted entities.
+- Computed fields (`next`, `previous`, `alternates`, chips) follow the public rules, so a draft points only to published neighbours. A draft has no position among the published items, so a draft case has `next: null` and a draft post has `previous: null` and `next: null`. `alternates` is `null` for every locale that is not published (the previewed one included), and `publishedAt` is `null` for a draft case.
+- Responses carry `Cache-Control: no-store`.
+- **401** `details.reason: "invalid_secret"`, **404** unknown slug or deleted entity, **400** for a missing or invalid `locale`.
+
+These endpoints never appear in the sitemap. The front calls them only in draft mode.
+
+### 12.2 `PUT /admin/faqs/order` (ADMIN, EDITOR)
+
+The body is `{ "ids": ["<faq id>", ...] }`. It must contain every non-deleted FAQ id exactly once, with the same semantics and errors as `PUT /admin/cases/order`. It sets `sortOrder` to the array index and returns **204**. FAQ order does not change the assistant's answers, so it neither revalidates nor reindexes anything. A missing, duplicated, unknown or deleted id, or a body that is not `{ ids: string[] }`, returns **400**.
+
+### 12.3 `GET /admin/assistant/usage?days=30` (ADMIN, EDITOR)
+
+Assistant token usage and estimated cost. `days` is 1–365 (default 30). The days are calendar days in `SiteSettings.timezone`, as in 10.11. Data comes from the `usage` JSON of the assistant messages created in the period. Only messages with a `usage` count (a failed turn stores none). `days` outside 1–365 and unknown query parameters return **400**.
+
+**200**
+
+```json
+{
+  "range": { "days": 30, "from": "2026-10-29", "to": "2026-11-27", "timeZone": "America/Lima" },
+  "totals": {
+    "conversations": 42,
+    "assistantMessages": 97,
+    "requests": 180,
+    "inputTokens": 410000,
+    "outputTokens": 52000,
+    "cacheReadInputTokens": 1300000,
+    "cacheCreationInputTokens": 90000,
+    "cacheHitRate": 0.72,
+    "estimatedCostUsd": 1.79
+  },
+  "perConversation": { "avgCostUsd": 0.043, "avgInputTokens": 9762, "avgOutputTokens": 1238 },
+  "byModel": [
+    { "model": "claude-sonnet-5-5", "requests": 180, "inputTokens": 410000, "outputTokens": 52000, "cacheReadInputTokens": 1300000, "cacheCreationInputTokens": 90000, "estimatedCostUsd": 1.79 }
+  ],
+  "series": [{ "date": "2026-11-27", "conversations": 3, "costUsd": 0.12 }],
+  "prices": { "claude-sonnet-5-5": { "input": 2.0, "output": 10.0, "cacheWrite": 2.5, "cacheRead": 0.1 } },
+  "unpricedModels": []
+}
+```
+
+- **Prices** are USD per million tokens, in a constant table in the code (`claude-sonnet-5-5`: input 2.00, output 10.00, cache write 2.50 (5-minute TTL, 1.25 × input), cache read 0.10). Update the table when prices change.
+- **Cost formula:** `input × input + cacheCreation × cacheWrite + cacheRead × cacheRead + output × output`, per message and per model. The API's `input_tokens` excludes cached tokens.
+- **Unpriced models:** models without a price add their tokens to the totals, not to the cost, and appear in `unpricedModels`.
+- **`cacheHitRate`:** `cacheRead / (input + cacheRead + cacheCreation)`, or `0` with no traffic.
+- **Conversations:** distinct conversations with at least one counted message in the period (not the conversations created in it). In `series` a conversation counts once, on the local day of its first counted message, so the series adds up to `totals.conversations`; `costUsd` is the cost of that day's messages. `perConversation` averages over `totals.conversations` (`avgInputTokens` is uncached input only) and is `0` with no conversations.
+- **Rounding:** costs to 6 decimals, `cacheHitRate` to 4, average tokens to integers.
+- **Unknown model:** a message stored without a model is reported as `"unknown"` (unpriced).
+- **`series`:** one entry per day, zeros included, oldest first.
+- **Excluded:** Voyage embeddings and admin test answers (`POST /admin/assistant/test`) are not included (test answers are never stored, so they cannot appear).

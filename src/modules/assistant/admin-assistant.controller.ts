@@ -20,6 +20,11 @@ import {
 } from '../conversations/conversations.service.js';
 import { DaysQueryDto } from '../conversations/dto/conversations-query.dto.js';
 import {
+  type AssistantUsage,
+  AssistantUsageService,
+  DEFAULT_USAGE_DAYS,
+} from './assistant-usage.service.js';
+import {
   type AssistantTestResult,
   AssistantService,
 } from './assistant.service.js';
@@ -32,6 +37,7 @@ export class AdminAssistantController {
     private readonly settings: AssistantSettingsService,
     private readonly assistant: AssistantService,
     private readonly conversations: ConversationsService,
+    private readonly usageService: AssistantUsageService,
   ) {}
 
   @Get('settings')
@@ -51,6 +57,12 @@ export class AdminAssistantController {
   @HttpCode(HttpStatus.OK)
   test(@Body() dto: AssistantTestDto): Promise<AssistantTestResult> {
     return this.assistant.test(dto);
+  }
+
+  /** Token usage and estimated cost of the stored assistant answers. */
+  @Get('usage')
+  usage(@Query() query: DaysQueryDto): Promise<AssistantUsage> {
+    return this.usageService.usage(query.days ?? DEFAULT_USAGE_DAYS);
   }
 
   /** "Crear FAQ" banner and dashboard: questions without an answer. */

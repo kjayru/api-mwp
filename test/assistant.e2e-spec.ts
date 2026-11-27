@@ -502,6 +502,8 @@ describe('Assistant (e2e, mocked Claude and Voyage)', () => {
       ['post', '/api/v1/admin/knowledge/reindex'],
       ['get', '/api/v1/admin/faqs'],
       ['get', '/api/v1/admin/stats/overview'],
+      ['get', '/api/v1/admin/assistant/usage'],
+      ['put', '/api/v1/admin/faqs/order'],
     ];
 
     it.each(adminRoutes)('%s %s: 401 without a token, 403 for a role that is not ADMIN/EDITOR', async (method, path) => {
@@ -599,6 +601,233 @@ describe('Assistant (e2e, mocked Claude and Voyage)', () => {
       expect(model.requests[0].tools?.map((t: any) => t.name)).toEqual(['buscar_casos']);
       expect(await prisma.conversation.count()).toBe(0);
       await http().post('/api/v1/admin/assistant/test').set(editor).send({ question: '' , locale: 'es' }).expect(400);
+    });
+
+    describe('PUT /admin/faqs/order', () => {
+      const createFaq = async (question: string): Promise<string> =>
+        (
+          await http()
+            .post('/api/v1/admin/faqs')
+            .set(editor)
+            .send({ translations: { ES: { question } } })
+            .expect(201)
+        ).body.id;
+      const order = () =>
+        http()
+          .get('/api/v1/admin/faqs')
+          .set(editor)
+          .expect(200)
+          .then((res) =>
+            res.body.data.map((f: { id: string }) => f.id as string),
+          );
+
+      it('sets sortOrder from the position, ignoring deleted FAQs, without reindexing', async () => {
+        const a = await createFaq('¿A?');
+        const b = await createFaq('¿B?');
+        const c = await createFaq('¿C?');
+        const gone = await createFaq('¿Borrada?');
+        await http().delete(`/api/v1/admin/faqs/${gone}`).set(editor).expect(204);
+        await app.get(KnowledgeSyncService).idle();
+        const schedule = vi.spyOn(app.get(KnowledgeSyncService), 'scheduleFaq');
+
+        await http()
+          .put('/api/v1/admin/faqs/order')
+          .set(editor)
+          .send({ ids: [c, a, b] })
+          .expect(204);
+
+        expect(await order()).toEqual([c, a, b]);
+        const rows = await prisma.faqDocument.findMany({
+          where: { id: { in: [a, b, c] } },
+          select: { id: true, sortOrder: true },
+        });
+        expect(Object.fromEntries(rows.map((r) => [r.id, r.sortOrder]))).toEqual({
+          [c]: 1,
+          [a]: 2,
+          [b]: 3,
+        });
+        expect(schedule).not.toHaveBeenCalled();
+        schedule.mockRestore();
+      });
+
+      it('400 for a missing, duplicated, unknown or deleted id and for a bad body', async () => {
+        const a = await createFaq('¿A?');
+        const b = await createFaq('¿B?');
+        const gone = await createFaq('¿Borrada?');
+        await http().delete(`/api/v1/admin/faqs/${gone}`).set(editor).expect(204);
+
+        for (const ids of [[a], [a, a, b], [a, b, 'nope'], [a, b, gone], []]) {
+          await http()
+            .put('/api/v1/admin/faqs/order')
+            .set(editor)
+            .send({ ids })
+            .expect(400);
+        }
+        for (const body of [{}, { ids: 'a' }, { ids: [1, 2] }, { ids: [a, b], extra: 1 }]) {
+          await http()
+            .put('/api/v1/admin/faqs/order')
+            .set(editor)
+            .send(body)
+            .expect(400);
+        }
+        expect(await order()).toEqual([a, b]);
+      });
+    });
+
+    describe('GET /admin/assistant/usage', () => {
+      const usageRow = (
+        conversationId: string,
+        createdAt: Date,
+        model: string | null,
+        usage: Record<string, number> | null,
+      ) => ({
+        conversationId,
+        role: 'ASSISTANT' as const,
+        content: 'respuesta',
+        createdAt,
+        model,
+        usage: usage ?? undefined,
+      });
+      const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
+      async function seedConversation(id: string, createdAt: Date) {
+        await prisma.conversation.create({
+          data: { id, visitorId: VISITOR, locale: 'ES', createdAt },
+        });
+      }
+
+      it('returns zeros and a zero-filled series for an empty period', async () => {
+        const { body } = await http()
+          .get('/api/v1/admin/assistant/usage?days=7')
+          .set(editor)
+          .expect(200);
+        expect(body.range).toMatchObject({ days: 7, timeZone: 'America/Lima' });
+        expect(body.totals).toMatchObject({
+          conversations: 0,
+          assistantMessages: 0,
+          requests: 0,
+          cacheHitRate: 0,
+          estimatedCostUsd: 0,
+        });
+        expect(body.series).toHaveLength(7);
+        expect(body.byModel).toEqual([]);
+        expect(body.unpricedModels).toEqual([]);
+        expect(body.prices['claude-sonnet-5-5']).toEqual({
+          input: 2,
+          output: 10,
+          cacheWrite: 2.5,
+          cacheRead: 0.1,
+        });
+        // Default is 30 days.
+        const defaults = await http().get('/api/v1/admin/assistant/usage').set(editor).expect(200);
+        expect(defaults.body.range.days).toBe(30);
+        expect(defaults.body.series).toHaveLength(30);
+      });
+
+      it('adds up tokens and cost across models, flags unpriced ones and ignores old and failed messages', async () => {
+        await seedConversation('conv-1', daysAgo(1));
+        await seedConversation('conv-2', daysAgo(2));
+        await seedConversation('conv-old', daysAgo(40));
+        await prisma.message.createMany({
+          data: [
+            usageRow('conv-1', daysAgo(1), 'claude-sonnet-5-5', {
+              inputTokens: 1_000_000,
+              outputTokens: 100_000,
+              cacheReadInputTokens: 500_000,
+              cacheCreationInputTokens: 200_000,
+              requests: 2,
+            }),
+            usageRow('conv-2', daysAgo(2), 'claude-sonnet-5-5', {
+              inputTokens: 500_000,
+              outputTokens: 50_000,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              requests: 1,
+            }),
+            usageRow('conv-2', daysAgo(2), 'claude-future-1', {
+              inputTokens: 300_000,
+              outputTokens: 30_000,
+              cacheReadInputTokens: 100_000,
+              cacheCreationInputTokens: 0,
+              requests: 1,
+            }),
+            // Failed turn (no usage) and a message outside the period.
+            usageRow('conv-1', daysAgo(1), 'claude-sonnet-5-5', null),
+            usageRow('conv-old', daysAgo(40), 'claude-sonnet-5-5', {
+              inputTokens: 9_000_000,
+              outputTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              requests: 1,
+            }),
+          ],
+        });
+
+        const { body } = await http()
+          .get('/api/v1/admin/assistant/usage?days=30')
+          .set(editor)
+          .expect(200);
+
+        // input 1.5M*2 + write 0.2M*2.5 + read 0.5M*0.1 + output 0.15M*10 = 5.05
+        expect(body.totals).toEqual({
+          conversations: 2,
+          assistantMessages: 3,
+          requests: 4,
+          inputTokens: 1_800_000,
+          outputTokens: 180_000,
+          cacheReadInputTokens: 600_000,
+          cacheCreationInputTokens: 200_000,
+          cacheHitRate: 0.2308,
+          estimatedCostUsd: 5.05,
+        });
+        expect(body.perConversation).toEqual({
+          avgCostUsd: 2.525,
+          avgInputTokens: 900_000,
+          avgOutputTokens: 90_000,
+        });
+        expect(body.byModel.map((m: { model: string }) => m.model)).toEqual([
+          'claude-sonnet-5-5',
+          'claude-future-1',
+        ]);
+        expect(body.byModel[1]).toMatchObject({ estimatedCostUsd: 0, inputTokens: 300_000 });
+        expect(body.unpricedModels).toEqual(['claude-future-1']);
+        const cost = body.series.reduce((s: number, d: { costUsd: number }) => s + d.costUsd, 0);
+        const convs = body.series.reduce((s: number, d: { conversations: number }) => s + d.conversations, 0);
+        expect(cost).toBeCloseTo(5.05, 6);
+        expect(convs).toBe(2);
+        expect(body.series).toHaveLength(30);
+      });
+
+      it('counts stored chat answers but not admin test answers', async () => {
+        model.script({ text: ['Hola.'], usage: { input_tokens: 1000, output_tokens: 200 } });
+        await chat({ message: 'Hola' }).expect(200);
+        const before = await http().get('/api/v1/admin/assistant/usage').set(editor).expect(200);
+        expect(before.body.totals).toMatchObject({
+          conversations: 1,
+          assistantMessages: 1,
+          requests: 1,
+          inputTokens: 1000,
+          outputTokens: 200,
+          // (1000*2 + 200*10) / 1e6
+          estimatedCostUsd: 0.004,
+        });
+
+        model.script({ text: ['Prueba.'], usage: { input_tokens: 5000, output_tokens: 900 } });
+        await http()
+          .post('/api/v1/admin/assistant/test')
+          .set(editor)
+          .send({ question: '¿Qué hicieron?', locale: 'es' })
+          .expect(200);
+
+        const after = await http().get('/api/v1/admin/assistant/usage').set(editor).expect(200);
+        expect(after.body.totals).toEqual(before.body.totals);
+      });
+
+      it('400 for days out of 1-365 or unknown parameters', async () => {
+        for (const query of ['days=0', 'days=366', 'days=abc', 'foo=1']) {
+          await http().get(`/api/v1/admin/assistant/usage?${query}`).set(editor).expect(400);
+        }
+      });
     });
 
     it('FAQ CRUD validates and soft-deletes', async () => {

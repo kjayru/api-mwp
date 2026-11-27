@@ -9,11 +9,12 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { AuthenticatedUser } from '../../common/auth/authenticated-user.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Public } from '../../common/decorators/public.decorator.js';
 import type { PublicUser } from '../users/entities/user.entity.js';
+import { PASSWORD_THROTTLE, REFRESH_THROTTLE } from './auth-throttle.js';
 import { AuthService } from './auth.service.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
@@ -37,7 +38,10 @@ export class AuthController {
     return this.authService.login(dto.email, dto.password, { ip, userAgent });
   }
 
+  /** 30 requests per minute per IP (REFRESH_THROTTLE). */
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: REFRESH_THROTTLE })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   refresh(
@@ -61,6 +65,8 @@ export class AuthController {
   }
 
   /** Any logged-in user. Revokes the user's other sessions (docs/API.md 11.6). */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: PASSWORD_THROTTLE })
   @Post('password')
   @HttpCode(HttpStatus.NO_CONTENT)
   async changePassword(

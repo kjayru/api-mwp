@@ -106,13 +106,24 @@ export class CasesService {
     return rows.map(toListItem);
   }
 
+  /**
+   * Detail of a case. `includeDrafts` (draft preview only) also finds
+   * translations that are not published; everything computed (neighbour,
+   * alternates) still follows the public rules.
+   */
   async findBySlug(
     publicLocale: PublicLocale,
     slug: string,
+    options: { includeDrafts?: boolean } = {},
   ): Promise<PublicCaseDetail> {
     const locale = toDbLocale(publicLocale);
     const row = await this.prisma.caseTranslation.findFirst({
-      where: { ...publishedIn(locale), slug },
+      where: {
+        ...(options.includeDrafts
+          ? { locale, case: { deletedAt: null } }
+          : publishedIn(locale)),
+        slug,
+      },
       select: {
         ...LIST_SELECT,
         blocks: true,
