@@ -42,5 +42,7 @@ export const e2eEnv = {
   SMTP_PASS: '',
   SMTP_FROM: '',
   SMTP_SECURE: '',
+  // reCAPTCHA off; recaptcha.e2e-spec.ts injects a fake RecaptchaService.
+  RECAPTCHA_SECRET_KEY: '',
   ADMIN_URL: 'http://localhost:3002',
 };

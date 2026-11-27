@@ -1,4 +1,5 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../common/decorators/public.decorator.js';
 import {
@@ -17,7 +18,10 @@ export class LeadsController {
   @Post()
   @UseGuards(ContactFormThrottlerGuard)
   @Throttle({ default: CONTACT_FORM_THROTTLE })
-  create(@Body() dto: ContactFormDto): Promise<ContactFormResult> {
-    return this.leads.createFromForm(dto);
+  create(
+    @Body() dto: ContactFormDto,
+    @Req() req: Request,
+  ): Promise<ContactFormResult> {
+    return this.leads.createFromForm(dto, req.ip);
   }
 }

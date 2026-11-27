@@ -50,7 +50,7 @@ Every error, from any endpoint, has this shape:
 ```
 
 - `message` is a `string`, or a `string[]` for validation errors (one entry per problem). Messages are in Spanish and safe to show in the admin.
-- `details` appears on **422** (publication) errors, on the **429** of the assistant and the contact form (`reason: "rate_limit"`), on the **400** of `POST /leads` and `PUT /admin/settings` (`fields`, sections 11.1 and 11.5) and on the user and password errors of section 11.6 (`reason`: `email_taken`, `self_change`, `last_admin`, `invalid_password`, `same_password`). It is machine-readable, so the admin can highlight the fields:
+- `details` appears on **422** (publication) errors, on the **429** of the assistant and the contact form (`reason: "rate_limit"`), on the **400** of `POST /leads` and `PUT /admin/settings` (`fields`, sections 11.1 and 11.5; `reason: "recaptcha_failed"` for reCAPTCHA, 11.1) and on the user and password errors of section 11.6 (`reason`: `email_taken`, `self_change`, `last_admin`, `invalid_password`, `same_password`). It is machine-readable, so the admin can highlight the fields:
 
 ```json
 {
@@ -1452,6 +1452,7 @@ The API runs `app.set('trust proxy', TRUST_PROXY)`, where the env var defaults t
 | `message` | 10–3000 characters |
 | `locale` | `es` \| `en` |
 | `consent` | Must be `true` (acceptance of the privacy policy); otherwise **400** |
+| `recaptchaToken` | Optional string, ≤ 4000. reCAPTCHA v3 token (action `contact`); required when the API has `RECAPTCHA_SECRET_KEY` (see below) |
 | `website` | Honeypot, hidden from people. Any value is accepted (never a 400). When it is not blank, the API answers **201** with the same shape (a fake id) but stores and sends nothing |
 
 **201** `{ "id": "cm…", "createdAt": "…" }`. The lead is stored with `source: FORM` and `status: NEW`. `interest` is stored as its Spanish label (`Plataforma SaaS`, `Ecommerce`, `Web / CMS`, `IA aplicada`, `Otro`), and `company` is prepended to `message` as `Empresa: <company>\n\n`.
@@ -1469,7 +1470,8 @@ The API runs `app.set('trust proxy', TRUST_PROXY)`, where the env var defaults t
   }
   ```
 
-- **Limit:** 5 per hour per IP (**429** in the usual error format, `details: { "reason": "rate_limit" }`, message in the `locale` of the body). Every request counts, including the ones answered 400.
+- **reCAPTCHA v3** (only when the API has `RECAPTCHA_SECRET_KEY`; otherwise `recaptchaToken` is ignored and nothing is verified). The front sends the token of action `contact` in `recaptchaToken`. After the DTO validation and the honeypot check (a filled honeypot still gets the fake 201 without calling Google), the API calls Google's `siteverify` (5 s timeout, `remoteip` = client IP). It answers **400** `{ "message": "No pudimos verificar que el envío es de una persona. Inténtalo de nuevo o escríbenos por email.", "details": { "reason": "recaptcha_failed" } }` (usual error format, `message` a string) when the token is missing, `success` is false, `action` is not `contact` or `score` is below `RECAPTCHA_MIN_SCORE` (default `0.5`). **Fail open:** if Google cannot be reached (network error, timeout, non-2xx, invalid JSON) the lead is accepted and a warning is logged.
+- **Limit:** 5 per hour per IP (**429** in the usual error format, `details: { "reason": "rate_limit" }`, message in the `locale` of the body). Every request counts, including the ones answered 400 (also by reCAPTCHA).
 - **Notification:** see 11.2. It is fire-and-forget, so the answer never waits for the email.
 - CORS: called from the browser of the public site (same origins as the chat).
 

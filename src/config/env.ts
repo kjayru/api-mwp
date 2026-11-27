@@ -150,6 +150,15 @@ const envSchema = z
     GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().optional()),
     GOOGLE_CLIENT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
     GOOGLE_REFRESH_TOKEN: z.preprocess(emptyToUndefined, z.string().optional()),
+    // --- reCAPTCHA v3 of the contact form ---
+    // Secret key. Without it POST /leads is not verified. (RECAPTCHA_PUBLIC_KEY
+    // belongs to the front and is ignored here.)
+    RECAPTCHA_SECRET_KEY: optionalString,
+    // Minimum score (0-1) to accept a submission.
+    RECAPTCHA_MIN_SCORE: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().min(0).max(1).default(0.5),
+    ),
     // --- Lead notifications (Phase 5) ---
     // SMTP account that emails SiteSettings.contactEmail on every new lead.
     // All five or none: without them the notification is only logged.

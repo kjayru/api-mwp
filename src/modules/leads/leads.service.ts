@@ -24,6 +24,7 @@ import {
   type UpdateLeadDto,
 } from './dto/admin-leads.dto.js';
 import { type ContactFormDto, FORM_INTERESTS } from './dto/contact-form.dto.js';
+import { RecaptchaService } from './recaptcha.service.js';
 
 export const LEAD_NOT_FOUND = 'Lead no encontrado';
 
@@ -153,17 +154,22 @@ export class LeadsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly recaptcha: RecaptchaService,
   ) {}
 
   // ---------------------------------------------------------------------------
   // Public contact form
   // ---------------------------------------------------------------------------
 
-  async createFromForm(dto: ContactFormDto): Promise<ContactFormResult> {
+  async createFromForm(
+    dto: ContactFormDto,
+    ip?: string,
+  ): Promise<ContactFormResult> {
     if (isHoneypotFilled(dto.website)) {
       // Same answer as a real submission, so bots learn nothing.
       return { id: fakeId(), createdAt: new Date() };
     }
+    await this.recaptcha.verify(dto.recaptchaToken, ip);
     const lead = await this.prisma.lead.create({
       data: {
         source: 'FORM',

@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { PrismaService } from '../../prisma/prisma.service.js';
 import { AppValidationPipe } from '../../common/validation/app-validation.pipe.js';
 import type { NotificationsService } from '../notifications/notifications.service.js';
+import type { RecaptchaService } from './recaptcha.service.js';
 import { ContactFormDto } from './dto/contact-form.dto.js';
 import {
   formMessage,
@@ -100,9 +101,11 @@ describe('LeadsService', () => {
     $transaction: vi.fn(),
   };
   const notifications = { notifyNewLead: vi.fn(async () => undefined) };
+  const recaptcha = { verify: vi.fn(async () => undefined) };
   const service = new LeadsService(
     prisma as unknown as PrismaService,
     notifications as unknown as NotificationsService,
+    recaptcha as unknown as RecaptchaService,
   );
 
   beforeEach(() => {
@@ -152,6 +155,21 @@ describe('LeadsService', () => {
       expect(result.createdAt).toBeInstanceOf(Date);
       expect(prisma.lead.create).not.toHaveBeenCalled();
       expect(notifications.notifyNewLead).not.toHaveBeenCalled();
+      expect(recaptcha.verify).not.toHaveBeenCalled();
+    });
+
+    it('verifies reCAPTCHA with the token and IP before creating, and stores nothing when it rejects', async () => {
+      const dto = await validate({ ...valid, recaptchaToken: 'tok' });
+      await service.createFromForm(dto, '203.0.113.7');
+      expect(recaptcha.verify).toHaveBeenCalledWith('tok', '203.0.113.7');
+      expect(prisma.lead.create).toHaveBeenCalledTimes(1);
+
+      prisma.lead.create.mockClear();
+      recaptcha.verify.mockRejectedValueOnce(new BadRequestException('x'));
+      await expect(service.createFromForm(dto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.lead.create).not.toHaveBeenCalled();
     });
 
     it('helpers: formMessage and isHoneypotFilled', () => {

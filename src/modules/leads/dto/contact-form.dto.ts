@@ -90,6 +90,12 @@ export class ContactFormDto {
   })
   consent: boolean;
 
+  /** reCAPTCHA v3 token (action "contact"). Required only when the API has a secret key. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  recaptchaToken?: string;
+
   /** Honeypot: hidden from people, so anything in it means a bot. Never rejected. */
   @Allow()
   website?: unknown;
