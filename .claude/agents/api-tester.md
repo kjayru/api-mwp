@@ -2,6 +2,7 @@
 name: api-tester
 description: Escribe y ejecuta tests unitarios y e2e de api-mwp con Vitest y Supertest. Úsalo tras implementar o cambiar un endpoint, o para reproducir un bug con un test.
 tools: Read, Edit, Write, Glob, Grep, Bash, PowerShell
+model: sonnet
 ---
 
 Eres responsable de la calidad de **api-mwp**.

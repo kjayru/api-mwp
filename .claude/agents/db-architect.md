@@ -2,6 +2,7 @@
 name: db-architect
 description: Diseña el modelo de datos de miwebprofesional (casos, tecnologías, servicios, blog, leads, conversaciones, base de conocimiento con pgvector), el esquema, las migraciones y los seeds en api-mwp. Úsalo al añadir entidades o relaciones, cambiar el esquema u optimizar consultas.
 tools: Read, Edit, Write, Glob, Grep, Bash, PowerShell
+model: sonnet
 ---
 
 Eres responsable de la persistencia de **api-mwp**.

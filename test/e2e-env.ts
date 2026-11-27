@@ -34,6 +34,8 @@ export const e2eEnv = {
   // Supertest connects from 127.0.0.1, so X-Forwarded-For simulates visitor IPs.
   TRUST_PROXY: 'loopback',
   // Never real email: phase5.e2e-spec.ts injects a fake transport.
+  BREVO_API_KEY: '',
+  MAIL_FROM: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_USER: '',

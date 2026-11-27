@@ -4,7 +4,7 @@ import { buildLeadEmail, type LeadEmailData } from './lead-email.js';
 import { MAIL_TRANSPORT, type MailTransport } from './mail-transport.js';
 
 export interface NotificationOptions {
-  /** SMTP_FROM. */
+  /** MAIL_FROM with Brevo, SMTP_FROM with SMTP. */
   from?: string;
   /** ADMIN_URL, without a trailing slash. */
   adminUrl: string;
@@ -44,7 +44,9 @@ export class NotificationsService {
     const { transport } = this;
     const { from, adminUrl, timeoutMs } = this.options;
     if (!transport || !from) {
-      this.logger.log('Lead notification skipped (SMTP not configured)');
+      this.logger.log(
+        'Lead notification skipped (no email provider configured)',
+      );
       return;
     }
     const settings = await this.prisma.siteSettings.findUnique({

@@ -44,6 +44,25 @@ export function parseTrustProxy(value: string): TrustProxy | null {
   return entries;
 }
 
+/** A sender: `Name <email>` or a bare email. */
+export interface MailAddress {
+  name?: string;
+  email: string;
+}
+
+/** Parses MAIL_FROM; null when the email part is not valid. */
+export function parseMailFrom(value: string): MailAddress | null {
+  const text = value.trim();
+  const match = /^(.*?)\s*<([^<>]+)>$/.exec(text);
+  const email = (match ? match[2] : text).trim();
+  if (!z.email().safeParse(email).success) return null;
+  const name = match?.[1]
+    .trim()
+    .replace(/^"(.*)"$/, '$1')
+    .trim();
+  return name ? { name, email } : { email };
+}
+
 const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
 
 const envSchema = z
@@ -148,6 +167,12 @@ const envSchema = z
       emptyToUndefined,
       z.enum(['true', 'false']).optional(),
     ),
+    // Brevo REST API key (xkeysib-...) with permission to send email. When set
+    // it takes precedence over SMTP_* and MAIL_FROM is required.
+    BREVO_API_KEY: optionalString,
+    // Brevo sender: "Name <email>" or a bare email. The address must be a
+    // verified sender or belong to an authenticated domain in Brevo.
+    MAIL_FROM: optionalString,
     // Base URL of admin-mwp, for the link in the notification email.
     ADMIN_URL: z.preprocess(
       emptyToUndefined,
@@ -179,6 +204,21 @@ const envSchema = z
         path: ['GOOGLE_REFRESH_TOKEN'],
         message:
           'Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN together (or none of them)',
+      });
+    }
+    if (env.BREVO_API_KEY && !env.MAIL_FROM) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MAIL_FROM'],
+        message: 'MAIL_FROM is required when BREVO_API_KEY is set',
+      });
+    }
+    if (env.MAIL_FROM && !parseMailFrom(env.MAIL_FROM)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MAIL_FROM'],
+        message:
+          'MAIL_FROM must be "Name <email@example.com>" or a valid email address',
       });
     }
     const smtp = [

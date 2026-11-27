@@ -92,7 +92,7 @@ describe('NotificationsService', () => {
     expect(email.text).toContain('Resumen:');
   });
 
-  it('only logs when SMTP is not configured', async () => {
+  it('only logs when no email provider is configured', async () => {
     await expect(make(null).notifyNewLead(lead)).resolves.toBeUndefined();
     expect(prisma.siteSettings.findUnique).not.toHaveBeenCalled();
   });

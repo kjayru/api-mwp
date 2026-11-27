@@ -1477,8 +1477,10 @@ The API runs `app.set('trust proxy', TRUST_PROXY)`, where the env var defaults t
 
 On every **new** lead (form, or the assistant when `crear_lead` or `agendar_reunion` creates the lead of the conversation; updates never notify), the API emails `SiteSettings.contactEmail`. The email has the name, email, phone, source, interest, locale, message or summary, and a link to `ADMIN_URL/leads/<id>`. Its `Reply-To` is the visitor's email.
 
-- SMTP via `nodemailer`, active only when `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` are set (all or none, validated at startup like the `GOOGLE_*` trio). `SMTP_SECURE` defaults to `true` when the port is 465. `ADMIN_URL` defaults to `http://localhost:3002`.
-- Without SMTP, the API only logs `Lead notification skipped (SMTP not configured)`. Without a `contactEmail` it logs a warning and sends nothing.
+- **Provider order:** Brevo when `BREVO_API_KEY` is set; otherwise SMTP when the five `SMTP_*` are set; otherwise nothing is sent.
+- **Brevo** (`POST https://api.brevo.com/v3/smtp/email`, REST, tag `lead`): needs `BREVO_API_KEY` (key with send permission) and `MAIL_FROM` (`Name <email>` or a bare email; required when the key is set, validated at startup). The `MAIL_FROM` address must be a **verified sender or belong to an authenticated domain** in Brevo. If Brevo's **Authorized IPs** restriction is on, the server's IP must be allowed. The API does not call Brevo at startup. Brevo answers **401 `unauthorized`** for a request from an IP that is not in the allowed list, so local development normally runs without `BREVO_API_KEY` (log-only) or with the developer IP added in Brevo. Example: `MAIL_FROM=miwebprofesional <soporte@miwebprofesional.com>`. Errors are logged with Brevo's status, `code` and `message`, never the key.
+- **SMTP** (alternative, `nodemailer`): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` (all or none, validated at startup). `SMTP_FROM` is independent of `MAIL_FROM`. `SMTP_SECURE` defaults to `true` when the port is 465. `ADMIN_URL` defaults to `http://localhost:3002`.
+- With no provider, the API only logs `Lead notification skipped (no email provider configured)`. Without a `contactEmail` it logs a warning and sends nothing.
 - A sending failure is logged and never fails the request. There is a 10 s timeout and no retries.
 - The email is plain text plus simple HTML, in Spanish. User values are HTML-escaped.
 

@@ -48,7 +48,9 @@ Se validan al arrancar (`src/config/env.ts`); la API no inicia si falta alguna o
 | `VOYAGE_MODEL` | no | `voyage-3.5` | Modelo multilingüe de Voyage. Debe devolver vectores de **1024** dimensiones (columna `vector(1024)`): `voyage-3.5`, `voyage-3.5-lite` o la familia `voyage-4`. Cambiarlo exige "Reindexar ahora" |
 | `KNOWLEDGE_MIN_SIMILARITY` | no | `0.5` | Similitud coseno mínima (0–1) para que un fragmento cuente como relevante. Por debajo, `buscar_casos` no devuelve nada y la pregunta se marca "sin respuesta" |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | no (las tres o ninguna) | — | Google Calendar (OAuth 2.0 con acceso offline de la cuenta del estudio; scopes `calendar.events` y `calendar.freebusy`). Sin ellas `agendar_reunion` guarda una reunión `REQUESTED` y el equipo la confirma por email |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | no (las cinco o ninguna) | — | Cuenta SMTP que avisa por email a `SiteSettings.contactEmail` de cada lead nuevo (docs/API.md 11.2). Sin ellas solo se registra en el log |
+| `BREVO_API_KEY` | no | — | Clave REST de Brevo (`xkeysib-…`, permiso de envío). Si está, es el proveedor de email de los avisos de lead y exige `MAIL_FROM` (docs/API.md 11.2) |
+| `MAIL_FROM` | con `BREVO_API_KEY` | — | Remitente `Nombre <email>` o email; debe ser un sender verificado o de un dominio autenticado en Brevo |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | no (las cinco o ninguna) | — | Cuenta SMTP que avisa por email a `SiteSettings.contactEmail` de cada lead nuevo (docs/API.md 11.2). Alternativa a Brevo. Sin proveedor solo se registra en el log |
 | `SMTP_SECURE` | no | `true` en el puerto 465 | TLS implícito (`true`/`false`); si no, STARTTLS |
 | `ADMIN_URL` | no | `http://localhost:3002` | URL de admin-mwp para el enlace del email (`<ADMIN_URL>/leads/<id>`) |
 
