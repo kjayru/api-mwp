@@ -141,6 +141,17 @@ export class UpdateSiteSettingsDto {
   @MaxLength(254)
   contactEmail: string;
 
+  /** Inbox for new-lead emails (never public); "" counts as null. */
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const email = value.trim().toLowerCase();
+    return email === '' ? null : email;
+  })
+  @NullOr()
+  @IsEmail({}, { message: 'notificationEmail debe ser null o un email válido' })
+  @MaxLength(254)
+  notificationEmail: string | null;
+
   /** Spaces, "+" and dashes are stripped before checking; "" counts as null. */
   @Transform(({ value }: { value: unknown }) => {
     if (typeof value !== 'string') return value;

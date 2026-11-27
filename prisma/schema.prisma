@@ -469,6 +469,8 @@ model PageView {
 model SiteSettings {
   id                     String   @id @default("default")
   contactEmail           String   @map("contact_email")
+  /// Inbox for new-lead emails; falls back to contactEmail. Never public.
+  notificationEmail      String?  @map("notification_email")
   /// E.164 without "+", as used by wa.me links (e.g. 51987654321).
   whatsapp               String?
   /// { "linkedin": url | null, "github": url | null, "instagram": url | null }

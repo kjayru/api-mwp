@@ -36,6 +36,7 @@ const day = [
 ];
 const valid = {
   contactEmail: ' Hola@MiWebProfesional.com ',
+  notificationEmail: null,
   whatsapp: '+51 987-654-321',
   socialLinks: {
     linkedin: 'https://www.linkedin.com/company/miwebprofesional',
@@ -65,6 +66,23 @@ describe('UpdateSiteSettingsDto (PUT /admin/settings validation)', () => {
   it('accepts whatsapp null (and "" as null)', async () => {
     expect((await validate({ ...valid, whatsapp: null })).whatsapp).toBeNull();
     expect((await validate({ ...valid, whatsapp: '' })).whatsapp).toBeNull();
+  });
+
+  it('notificationEmail: null, "" (as null) or a valid email stored lowercase', async () => {
+    const of = async (value: unknown) =>
+      (await validate({ ...valid, notificationEmail: value })).notificationEmail;
+    expect(await of(null)).toBeNull();
+    expect(await of('')).toBeNull();
+    expect(await of(' Leads@MiWeb.com ')).toBe('leads@miweb.com');
+    expect(await errorsOf({ ...valid, notificationEmail: 'nope' })).toContain(
+      'notificationEmail debe ser null o un email válido',
+    );
+    expect(
+      await errorsOf({
+        ...valid,
+        notificationEmail: `${'a'.repeat(250)}@x.com`,
+      }),
+    ).not.toHaveLength(0);
   });
 
   it.each([
@@ -263,6 +281,7 @@ describe('SettingsService', () => {
     prisma.siteSettings.findUnique.mockResolvedValue({
       id: 'default',
       contactEmail: 'hola@miwebprofesional.com',
+      notificationEmail: 'leads@miwebprofesional.com',
       whatsapp: '51900000000',
       socialLinks: { linkedin: 'https://l' },
       businessHours: { mon: day },
@@ -281,6 +300,10 @@ describe('SettingsService', () => {
       'timezone',
       'whatsapp',
     ]);
+    expect(view).not.toHaveProperty('notificationEmail');
+    expect((await service.getAdmin()).notificationEmail).toBe(
+      'leads@miwebprofesional.com',
+    );
     expect(view.businessHours.mon).toEqual(day);
     expect(view.businessHours.sun).toEqual([]);
   });

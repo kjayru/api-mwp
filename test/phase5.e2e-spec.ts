@@ -28,6 +28,7 @@ const BROWSER =
 const week = [{ start: '08:00', end: '19:00' }];
 const SETTINGS = {
   contactEmail: 'hola@miwebprofesional.com',
+  notificationEmail: 'leads@miwebprofesional.com',
   whatsapp: '51900000000',
   socialLinks: {
     linkedin: 'https://www.linkedin.com/company/miwebprofesional',
@@ -186,7 +187,7 @@ describe('Phase 5 (e2e): leads, visits, settings, users and search', () => {
       });
       await eventually(() => expect(mail.sent).toHaveLength(1));
       expect(mail.sent[0]).toMatchObject({
-        to: 'hola@miwebprofesional.com',
+        to: SETTINGS.notificationEmail,
         replyTo: 'ana@example.com',
       });
       expect(mail.sent[0].text).toContain(
@@ -531,6 +532,28 @@ describe('Phase 5 (e2e): leads, visits, settings, users and search', () => {
         businessHours: SETTINGS.businessHours,
         timezone: 'America/Lima',
       });
+      expect(res.body).not.toHaveProperty('notificationEmail');
+    });
+
+    it('PUT /admin/settings: notificationEmail is null, "" (null) or a valid email', async () => {
+      const body = { ...SETTINGS, notificationEmail: ' Ventas@MiWeb.com ' };
+      const put = (payload: object) =>
+        http().put('/api/v1/admin/settings').set(admin).send(payload);
+
+      const saved = await put(body).expect(200);
+      expect(saved.body.notificationEmail).toBe('ventas@miweb.com');
+      const cleared = await put({ ...body, notificationEmail: '' }).expect(200);
+      expect(cleared.body.notificationEmail).toBeNull();
+      const nulled = await put({ ...body, notificationEmail: null }).expect(200);
+      expect(nulled.body.notificationEmail).toBeNull();
+
+      const invalid = await put({ ...body, notificationEmail: 'nope' }).expect(
+        400,
+      );
+      expect(invalid.body.details.fields).toEqual(['notificationEmail']);
+      const publicRes = await http().get('/api/v1/settings').expect(200);
+      expect(publicRes.body).not.toHaveProperty('notificationEmail');
+      await put(SETTINGS).expect(200);
     });
 
     it('GET /admin/settings for editors; PUT only for admins, validated', async () => {

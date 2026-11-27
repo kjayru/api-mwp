@@ -51,9 +51,10 @@ export class NotificationsService {
     }
     const settings = await this.prisma.siteSettings.findUnique({
       where: { id: 'default' },
-      select: { contactEmail: true },
+      select: { contactEmail: true, notificationEmail: true },
     });
-    if (!settings?.contactEmail) {
+    const recipient = settings?.notificationEmail || settings?.contactEmail;
+    if (!recipient) {
       this.logger.warn(
         'Lead notification skipped (SiteSettings.contactEmail is not set)',
       );
@@ -72,7 +73,7 @@ export class NotificationsService {
       await Promise.race([
         transport.sendMail({
           from,
-          to: settings.contactEmail,
+          to: recipient,
           replyTo: lead.email,
           ...email,
         }),

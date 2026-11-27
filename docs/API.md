@@ -1475,12 +1475,12 @@ The API runs `app.set('trust proxy', TRUST_PROXY)`, where the env var defaults t
 
 ### 11.2 Email notification to the team
 
-On every **new** lead (form, or the assistant when `crear_lead` or `agendar_reunion` creates the lead of the conversation; updates never notify), the API emails `SiteSettings.contactEmail`. The email has the name, email, phone, source, interest, locale, message or summary, and a link to `ADMIN_URL/leads/<id>`. Its `Reply-To` is the visitor's email.
+On every **new** lead (form, or the assistant when `crear_lead` or `agendar_reunion` creates the lead of the conversation; updates never notify), the API emails `SiteSettings.notificationEmail`, or `SiteSettings.contactEmail` when `notificationEmail` is null (the inbox is separate from the public contact email, see 11.5). The email has the name, email, phone, source, interest, locale, message or summary, and a link to `ADMIN_URL/leads/<id>`. Its `Reply-To` is the visitor's email.
 
 - **Provider order:** Brevo when `BREVO_API_KEY` is set; otherwise SMTP when the five `SMTP_*` are set; otherwise nothing is sent.
 - **Brevo** (`POST https://api.brevo.com/v3/smtp/email`, REST, tag `lead`): needs `BREVO_API_KEY` (key with send permission) and `MAIL_FROM` (`Name <email>` or a bare email; required when the key is set, validated at startup). The `MAIL_FROM` address must be a **verified sender or belong to an authenticated domain** in Brevo. If Brevo's **Authorized IPs** restriction is on, the server's IP must be allowed. The API does not call Brevo at startup. Brevo answers **401 `unauthorized`** for a request from an IP that is not in the allowed list, so local development normally runs without `BREVO_API_KEY` (log-only) or with the developer IP added in Brevo. Example: `MAIL_FROM=miwebprofesional <soporte@miwebprofesional.com>`. Errors are logged with Brevo's status, `code` and `message`, never the key.
 - **SMTP** (alternative, `nodemailer`): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` (all or none, validated at startup). `SMTP_FROM` is independent of `MAIL_FROM`. `SMTP_SECURE` defaults to `true` when the port is 465. `ADMIN_URL` defaults to `http://localhost:3002`.
-- With no provider, the API only logs `Lead notification skipped (no email provider configured)`. Without a `contactEmail` it logs a warning and sends nothing.
+- With no provider, the API only logs `Lead notification skipped (no email provider configured)`. Without either email it logs a warning and sends nothing.
 - A sending failure is logged and never fails the request. There is a 10 s timeout and no retries.
 - The email is plain text plus simple HTML, in Spanish. User values are HTML-escaped.
 
@@ -1569,6 +1569,7 @@ The query and hash are removed, trailing `/` is dropped (except for `/es` and `/
 ```json
 {
   "contactEmail": "hola@miwebprofesional.com",
+  "notificationEmail": "leads@miwebprofesional.com",
   "whatsapp": "51987654321",
   "socialLinks": { "linkedin": "https://…", "github": null, "instagram": null },
   "businessHours": { "mon": [{ "start": "08:00", "end": "19:00" }], "sun": [] },
@@ -1583,6 +1584,7 @@ The query and hash are removed, trailing `/` is dropped (except for `/es` and `/
 `PUT /admin/settings` (**ADMIN only**) takes the same body without `updatedAt` and returns **200** with the saved row. Validation:
 
 - `contactEmail` must be a valid email (stored lowercase).
+- `notificationEmail` is required: `null` or a valid email of up to 254 characters (trimmed, stored lowercase); `""` counts as `null`. It is the inbox for new-lead emails (11.2), falling back to `contactEmail` when null. It is **never** in the public `GET /settings` response.
 - `whatsapp` is required: `null` or 8–15 digits. The API strips spaces, `+` and dashes before checking, and stores the digits; `""` counts as `null`.
 - `socialLinks` has exactly the three keys, each `null` or an `https://` URL of up to 300 characters.
 - `businessHours` needs all seven days. Each day has at most 3 intervals in `HH:mm` (00:00–23:59), with `start < end`, no overlaps, sorted.

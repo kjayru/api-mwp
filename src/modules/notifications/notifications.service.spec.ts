@@ -48,10 +48,11 @@ describe('NotificationsService', () => {
     transport = new FakeTransport();
     prisma.siteSettings.findUnique.mockResolvedValue({
       contactEmail: 'hola@miwebprofesional.com',
+      notificationEmail: null,
     });
   });
 
-  it('emails contactEmail with the lead data and the admin link', async () => {
+  it('emails contactEmail (no notificationEmail) with the lead data and the admin link', async () => {
     await make().notifyNewLead(lead);
 
     expect(transport.sent).toHaveLength(1);
@@ -70,6 +71,15 @@ describe('NotificationsService', () => {
     expect(message.html).toContain(
       'href="https://admin.miwebprofesional.com/leads/lead-1"',
     );
+  });
+
+  it('emails notificationEmail instead of contactEmail when it is set', async () => {
+    prisma.siteSettings.findUnique.mockResolvedValue({
+      contactEmail: 'hola@miwebprofesional.com',
+      notificationEmail: 'leads@miwebprofesional.com',
+    });
+    await make().notifyNewLead(lead);
+    expect(transport.sent[0].to).toBe('leads@miwebprofesional.com');
   });
 
   it('HTML-escapes every user value', async () => {

@@ -33,6 +33,8 @@ export interface PublicSiteSettings {
 }
 
 export interface AdminSiteSettings extends PublicSiteSettings {
+  /** Inbox for new-lead emails; falls back to contactEmail. Never public. */
+  notificationEmail: string | null;
   meetingDurationMinutes: number;
   /** null only while the row does not exist yet (the seed creates it). */
   updatedAt: Date | null;
@@ -42,6 +44,7 @@ function toView(row: SiteSettings | null): AdminSiteSettings {
   if (!row) {
     return {
       contactEmail: '',
+      notificationEmail: null,
       whatsapp: null,
       socialLinks: parseSocialLinks(null),
       businessHours: normalizeBusinessHours(DEFAULT_BUSINESS_HOURS),
@@ -52,6 +55,7 @@ function toView(row: SiteSettings | null): AdminSiteSettings {
   }
   return {
     contactEmail: row.contactEmail,
+    notificationEmail: row.notificationEmail,
     whatsapp: row.whatsapp,
     socialLinks: parseSocialLinks(row.socialLinks),
     businessHours: normalizeBusinessHours(row.businessHours),
@@ -100,6 +104,7 @@ export class SettingsService {
     );
     const data = {
       contactEmail: dto.contactEmail,
+      notificationEmail: dto.notificationEmail,
       whatsapp: dto.whatsapp,
       socialLinks: {
         linkedin: dto.socialLinks.linkedin,

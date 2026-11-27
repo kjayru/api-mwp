@@ -280,6 +280,7 @@ describe('Front revalidation webhook (e2e)', () => {
       .set(bearer(accessToken(app, 'ADMIN')))
       .send({
         contactEmail: 'hola@miwebprofesional.com',
+        notificationEmail: null,
         whatsapp: null,
         socialLinks: { linkedin: null, github: null, instagram: null },
         businessHours: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
